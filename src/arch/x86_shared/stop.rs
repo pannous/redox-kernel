@@ -33,7 +33,7 @@ pub unsafe fn emergency_reset() -> ! {
         // set IDT limit to zero
         mov word ptr [esp+16], 0
         lidt [esp+16]
-        int $3
+        int 3
     ",
             options(noreturn)
         );
@@ -51,7 +51,7 @@ pub unsafe fn emergency_reset() -> ! {
         // set IDT limit to zero
         mov word ptr [rsp+16], 0
         lidt [rsp+16]
-        int $3
+        int 3
     ",
             options(noreturn)
         );
