@@ -146,7 +146,7 @@ impl InterruptController for Bcm2836ArmInterruptController {
             while i < cnt && (idx + i < 1024) {
                 irq_desc[idx + i].basic.ic_idx = ic_idx;
                 irq_desc[idx + i].basic.ic_irq = i as u32;
-                irq_desc[idx + i].basic.used = true;
+                irq_desc[idx + i].basic.used = false;  // Available for driver reservation
 
                 i += 1;
             }
