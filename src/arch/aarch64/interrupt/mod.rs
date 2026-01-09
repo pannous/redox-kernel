@@ -26,7 +26,8 @@ pub unsafe fn disable() {
 #[inline(always)]
 pub unsafe fn enable_and_halt() {
     unsafe {
-        asm!("wfi", "msr daifclr, #2", "nop");
+        // DSB ensures TLB/memory ops complete before WFI (required for HVF)
+        asm!("dsb sy", "wfi", "msr daifclr, #2", "nop");
     }
 }
 
@@ -44,6 +45,7 @@ pub unsafe fn enable_and_nop() {
 #[inline(always)]
 pub unsafe fn halt() {
     unsafe {
-        asm!("wfi");
+        // DSB ensures TLB/memory ops complete before WFI (required for HVF)
+        asm!("dsb sy", "wfi");
     }
 }
