@@ -295,6 +295,15 @@ impl AddrSpaceWrapper {
             // think), execute-only memory is also supported.
 
             grant.remap(mapper, &mut flusher, new_flags);
+
+            // Sync instruction cache after making pages executable (required for HVF)
+            if flags.contains(MapFlags::PROT_EXEC) {
+                let span = grant.span();
+                unsafe {
+                    RmmA::sync_icache(span.base.start_address(), span.count * crate::memory::PAGE_SIZE);
+                }
+            }
+
             //info!("Mprotect grant became {:#?}", grant);
             guard.grants.insert(grant);
         }
@@ -713,6 +722,16 @@ impl AddrSpace {
             &mut Flusher::with_cpu_set(&mut self.used_by, &dst_lock.tlb_ack),
         )?;
         self.grants.insert(grant);
+
+        // Sync instruction cache after mapping executable pages (required for HVF)
+        if flags.contains(MapFlags::PROT_EXEC) {
+            unsafe {
+                RmmA::sync_icache(
+                    selected_span.base.start_address(),
+                    selected_span.count * crate::memory::PAGE_SIZE,
+                );
+            }
+        }
 
         Ok(selected_span.base)
     }
