@@ -97,6 +97,17 @@ unsafe extern "C" fn start(args_ptr: *const KernelArgs) -> ! {
             info!("Redox OS starting...");
             args.print();
 
+            // Pre-register QEMU virt device memory in case DTB parsing fails
+            // This ensures device MMIO can be accessed even without DTB
+            crate::startup::memory::register_memory_region(
+                0x08000000, 0x08000000,
+                crate::startup::memory::BootloaderMemoryKind::Device
+            );
+            crate::startup::memory::register_memory_region(
+                0x10000000, 0x30000000,
+                crate::startup::memory::BootloaderMemoryKind::Device
+            );
+
             // Initialize RMM
             crate::startup::memory::init(&args, None, None);
 
@@ -129,6 +140,9 @@ unsafe extern "C" fn start(args_ptr: *const KernelArgs) -> ! {
                     {
                         crate::acpi::init(args.acpi_rsdp());
                     }
+
+                    // Try QEMU virt machine's known PL031 RTC address as fallback
+                    device::rtc::init_qemu_virt();
                 }
             }
 
