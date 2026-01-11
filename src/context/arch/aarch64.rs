@@ -365,6 +365,11 @@ unsafe extern "C" fn switch_to_inner(_prev: &mut Context, _next: &mut Context) {
         ldr x2, [x1, #{off_sp}]
         mov sp, x2
 
+        // ISB ensures all system register writes (ELR, SPSR, TPIDR, etc.)
+        // are complete before executing in the new context. Required for
+        // HVF which can speculate aggressively across register changes.
+        isb
+
         b {switch_hook}
         ",
         off_x19 = const(offset_of!(Context, x19)),
