@@ -1229,7 +1229,7 @@ impl Grant {
         flusher: &mut Flusher,
     ) -> Result<Grant, Enomem> {
         if !span.count.is_power_of_two() {
-            warn!("Attempted non-power-of-two zeroed_phys_contiguous allocation, rounding up to next power of two.");
+            trace!("Attempted non-power-of-two zeroed_phys_contiguous allocation, rounding up to next power of two.");
         }
 
         let alloc_order = span.count.next_power_of_two().trailing_zeros();
