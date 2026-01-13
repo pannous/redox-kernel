@@ -92,13 +92,18 @@ pub fn open(raw_path: UserSliceRo, flags: usize, token: &mut CleanLockToken) -> 
     let path_buf = copy_path_to_buf(raw_path, PATH_MAX)?;
 
     // Display a deprecation warning for any usage of the legacy scheme syntax (scheme:/path)
+    // Only warn if it looks like an actual scheme: prefix (colon near start, not in middle like URLs)
     // FIXME remove entries from this list as the respective programs get updated
-    if path_buf.contains(':') && !is_legacy(&path_buf) {
-        let name = context::current().read(token.token()).name;
-        if path_buf == "event:" || path_buf.starts_with("time:") {
-            // FIXME winit issues
-        } else {
-            println!("deprecated: legacy path {:?} used by {}", path_buf, name);
+    if let Some(colon_pos) = path_buf.find(':') {
+        // Only warn if colon is near the start (scheme:/path pattern) and not a URL or argument
+        if colon_pos < 20 && !is_legacy(&path_buf)
+            && !path_buf.contains("http:") && !path_buf.contains("https:") {
+            let name = context::current().read(token.token()).name;
+            if path_buf == "event:" || path_buf.starts_with("time:") {
+                // FIXME winit issues
+            } else {
+                println!("deprecated: legacy path {:?} used by {}", path_buf, name);
+            }
         }
     }
     let path = RedoxPath::from_absolute(&path_buf).ok_or(Error::new(EINVAL))?;
