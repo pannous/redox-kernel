@@ -50,38 +50,54 @@ pub fn register(
     });
 }
 
+/// Result of checking a single timeout entry
+enum TriggerAction {
+    /// Timeout elapsed, trigger the event
+    Fire(Timeout),
+    /// Timeout not yet elapsed, check next entry
+    Skip,
+    /// No more entries to check
+    Done,
+}
+
 pub fn trigger(token: &mut CleanLockToken) {
     let mono = time::monotonic();
     let real = time::realtime();
 
     let mut i = 0;
     loop {
-        let mut registry = registry(token.token());
-        let timeout = if i < registry.len() {
-            let trigger = match registry[i].clock {
-                CLOCK_MONOTONIC => {
-                    let time = registry[i].time;
-                    mono >= time
-                }
-                CLOCK_REALTIME => {
-                    let time = registry[i].time;
-                    real >= time
-                }
-                clock => {
-                    println!("timeout::trigger: unknown clock {}", clock);
-                    true
-                }
-            };
-
-            if trigger {
-                registry.remove(i).unwrap()
+        // Check one timeout entry while holding the lock, then release it
+        let action = {
+            let mut registry = registry(token.token());
+            if i >= registry.len() {
+                TriggerAction::Done
             } else {
-                i += 1;
-                continue;
+                let should_trigger = match registry[i].clock {
+                    CLOCK_MONOTONIC => mono >= registry[i].time,
+                    CLOCK_REALTIME => real >= registry[i].time,
+                    clock => {
+                        println!("timeout::trigger: unknown clock {}", clock);
+                        true
+                    }
+                };
+
+                if should_trigger {
+                    TriggerAction::Fire(registry.remove(i).unwrap())
+                } else {
+                    i += 1;
+                    TriggerAction::Skip
+                }
             }
-        } else {
-            break;
+            // registry lock is released here when the block ends
         };
-        event::trigger(timeout.scheme_id, timeout.event_id, EVENT_READ);
+
+        // Now handle the action WITHOUT holding the registry lock
+        match action {
+            TriggerAction::Fire(timeout) => {
+                event::trigger(timeout.scheme_id, timeout.event_id, EVENT_READ);
+            }
+            TriggerAction::Skip => continue,
+            TriggerAction::Done => break,
+        }
     }
 }

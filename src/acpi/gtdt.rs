@@ -47,10 +47,17 @@ impl Gtdt {
             return;
         };
 
-        let gsiv = gtdt.non_secure_el1_timer_gsiv;
-        info!("generic_timer gsiv = {}", gsiv);
         let mut timer = GenericTimer::new();
         timer.init();
+
+        // Use the correct GSIV based on whether we're using virtual or physical timer
+        let gsiv = if timer.use_virtual_timer {
+            gtdt.virtual_el1_timer_gsiv
+        } else {
+            gtdt.non_secure_el1_timer_gsiv
+        };
+        info!("generic_timer gsiv = {} (virtual={})", gsiv, timer.use_virtual_timer);
+
         register_irq(gsiv, Box::new(timer));
         unsafe { IRQ_CHIP.irq_enable(gsiv as u32) };
     }
