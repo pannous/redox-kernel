@@ -1,4 +1,3 @@
-use crate::info;
 use core::sync::atomic::{AtomicUsize, Ordering};
 use fdt::Fdt;
 

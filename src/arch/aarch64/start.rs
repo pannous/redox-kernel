@@ -12,7 +12,7 @@ use core::{
 use fdt::Fdt;
 
 use crate::{
-    allocator, arch::interrupt, device, devices::graphical_debug, dtb, paging, startup::KernelArgs,
+    allocator, device, devices::graphical_debug, dtb, paging, startup::KernelArgs,
 };
 
 /// Test of zero values in BSS.

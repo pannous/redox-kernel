@@ -67,7 +67,7 @@ pub(super) fn init(madt: Madt) {
             }
         }
         3 => {
-            for gicc in giccs {
+            for _gicc in giccs {
                 let mut gic_cpu_if = GicV3CpuIf;
                 unsafe { gic_cpu_if.init() };
                 info!("{:#x?}", gic_cpu_if);

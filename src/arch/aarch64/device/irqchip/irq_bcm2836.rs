@@ -117,7 +117,7 @@ impl Bcm2836ArmInterruptController {
 }
 
 impl InterruptHandler for Bcm2836ArmInterruptController {
-    fn irq_handler(&mut self, _irq: u32, token: &mut CleanLockToken) {}
+    fn irq_handler(&mut self, _irq: u32, _token: &mut CleanLockToken) {}
 }
 
 impl InterruptController for Bcm2836ArmInterruptController {

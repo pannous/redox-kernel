@@ -78,7 +78,7 @@ impl GenericInterruptController {
 }
 
 impl InterruptHandler for GenericInterruptController {
-    fn irq_handler(&mut self, _irq: u32, token: &mut CleanLockToken) {}
+    fn irq_handler(&mut self, _irq: u32, _token: &mut CleanLockToken) {}
 }
 
 impl InterruptController for GenericInterruptController {
