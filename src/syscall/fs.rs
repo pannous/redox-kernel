@@ -102,7 +102,7 @@ pub fn open(raw_path: UserSliceRo, flags: usize, token: &mut CleanLockToken) -> 
             if path_buf == "event:" || path_buf.starts_with("time:") {
                 // FIXME winit issues
             } else {
-                println!("deprecated: legacy path {:?} used by {}", path_buf, name);
+                trace!("deprecated: legacy path {:?} used by {}", path_buf, name);
             }
         }
     }
