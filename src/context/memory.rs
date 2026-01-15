@@ -1198,11 +1198,13 @@ impl Grant {
             }
         }
 
+        // Map physmap pages with the requested flags (including write if specified)
+        // Device memory like framebuffers needs to be writable immediately
         for (i, page) in span.pages().enumerate().take(MAX_EAGER_PAGES) {
             let frame = phys.next_by(i);
             unsafe {
                 let Some(result) =
-                    mapper.map_phys(page.start_address(), frame.base(), flags.write(false))
+                    mapper.map_phys(page.start_address(), frame.base(), flags)
                 else {
                     break;
                 };
@@ -2517,7 +2519,10 @@ fn correct_inner<'l>(
                 }
             }
         }
-        Provider::PhysBorrowed { base } => base.next_by(pages_from_grant_start),
+        Provider::PhysBorrowed { base } => {
+            debug!("page fault on PhysBorrowed: page={:?} base={:?}", faulting_page, base);
+            base.next_by(pages_from_grant_start)
+        }
         Provider::External {
             address_space: ref foreign_address_space,
             src_base,
