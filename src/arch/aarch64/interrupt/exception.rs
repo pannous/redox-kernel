@@ -200,8 +200,43 @@ exception_stack!(synchronous_exception_at_el0, |stack| {
                     "FATAL: Not an SVC induced synchronous exception (ty={:b})",
                     ty
                 );
-                println!("FAR_EL1: {:#0x}", far_el1());
-                //crate::debugger::debugger(None);
+                // Debug: print key registers for crash analysis
+                // Copy from packed struct to avoid unaligned access
+                let esr = { stack.iret.esr_el1 };
+                let elr = { stack.iret.elr_el1 };
+                let sp0 = { stack.iret.sp_el0 };
+                let x0 = { stack.scratch.x0 };
+                let x1 = { stack.scratch.x1 };
+                let x2 = { stack.scratch.x2 };
+                let x3 = { stack.scratch.x3 };
+                let x4 = { stack.scratch.x4 };
+                let x5 = { stack.scratch.x5 };
+                let x6 = { stack.scratch.x6 };
+                let x7 = { stack.scratch.x7 };
+                let x8 = { stack.scratch.x8 };
+                let x16 = { stack.scratch.x16 };
+                let x17 = { stack.scratch.x17 };
+                let x18 = { stack.scratch.x18 };
+                let x19 = { stack.preserved.x19 };
+                let x20 = { stack.preserved.x20 };
+                let x29 = { stack.preserved.x29 };
+                let x30 = { stack.preserved.x30 };
+                println!("=== CRASH REGISTERS ===");
+                println!("ESR_EL1: {:#018x} (EC={:#08b})", esr, ty);
+                println!("FAR_EL1: {:#018x}", far_el1());
+                println!("ELR_EL1: {:#018x}", elr);
+                println!("SP_EL0:  {:#018x}", sp0);
+                println!("--- Scratch regs ---");
+                println!("X0:  {:#018x}  X1:  {:#018x}", x0, x1);
+                println!("X2:  {:#018x}  X3:  {:#018x}", x2, x3);
+                println!("X4:  {:#018x}  X5:  {:#018x}", x4, x5);
+                println!("X6:  {:#018x}  X7:  {:#018x}", x6, x7);
+                println!("X8:  {:#018x}  X16: {:#018x}", x8, x16);
+                println!("X17: {:#018x}  X18: {:#018x}", x17, x18);
+                println!("--- Preserved regs ---");
+                println!("X29: {:#018x}  X30: {:#018x}", x29, x30);
+                println!("X19: {:#018x}  X20: {:#018x}", x19, x20);
+                println!("=== STACK TRACE ===");
                 stack.trace();
                 excp_handler(Exception {
                     kind: 0, // TODO
