@@ -2520,7 +2520,8 @@ fn correct_inner<'l>(
             }
         }
         Provider::PhysBorrowed { base } => {
-            debug!("page fault on PhysBorrowed: page={:?} base={:?}", faulting_page, base);
+            // Page faults on physmapped memory - too verbose, use trace for debugging
+            // trace!("page fault on PhysBorrowed: page={:?} base={:?}", faulting_page, base);
             base.next_by(pages_from_grant_start)
         }
         Provider::External {
