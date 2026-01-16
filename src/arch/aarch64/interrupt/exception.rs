@@ -244,6 +244,7 @@ exception_stack!(synchronous_exception_at_el0, |stack| {
                 excp_handler(Exception {
                     kind: 0, // TODO
                 });
+                }
             }
         }
     }
