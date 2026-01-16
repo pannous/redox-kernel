@@ -179,9 +179,7 @@ impl MemoryScheme {
                 )
             },
         )?;
-        let virt_addr = base_page.start_address().data();
-        info!("physmap: phys={:#x} size={:#x} -> virt={:#x}", physical_address, size, virt_addr);
-        Ok(virt_addr)
+        Ok(base_page.start_address().data())
     }
 }
 impl KernelScheme for MemoryScheme {
