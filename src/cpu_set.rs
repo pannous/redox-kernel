@@ -16,6 +16,7 @@ pub struct LogicalCpuId(u32);
 impl LogicalCpuId {
     pub const BSP: Self = Self::new(0);
 
+    #[allow(dead_code)] // Used on multi-core platforms
     pub fn next() -> Self {
         let id = CPU_COUNT.fetch_add(1, Ordering::Relaxed);
         assert!(id < MAX_CPU_COUNT);

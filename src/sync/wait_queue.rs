@@ -27,6 +27,7 @@ impl<T> WaitQueue<T> {
         self.inner.lock().is_empty()
     }
 
+    #[allow(dead_code)] // TODO: wire up blocking receive
     pub fn receive(
         &self,
         block: bool,

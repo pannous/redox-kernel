@@ -2,6 +2,8 @@
 //! handling should go here, unless they closely depend on the design
 //! of the scheme.
 
+#![allow(dead_code)] // TODO: ptrace not yet fully wired up on aarch64
+
 use crate::{
     event,
     percpu::PercpuBlock,

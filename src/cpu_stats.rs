@@ -101,6 +101,7 @@ impl CpuStats {
     /// # Parameters
     /// * `irq` - The ID of the interrupt that happened.
     #[inline]
+    #[allow(dead_code)] // TODO: wire up in irq::eoi
     pub fn add_irq(&self, irq: u8) {
         IRQ_COUNT[irq as usize].fetch_add(1, Ordering::Relaxed);
         self.irq.fetch_add(1, Ordering::Relaxed);

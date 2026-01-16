@@ -96,6 +96,7 @@ enum ParsedCqe {
         tag: u32,
         fd: usize,
     },
+    #[allow(dead_code)] // TODO: implement multiple FD response handling
     ResponseWithMultipleFds {
         tag: u32,
         num_fds: usize,
@@ -105,6 +106,7 @@ enum ParsedCqe {
         flags: FobtainFdFlags,
         dst_fd_or_ptr: usize,
     },
+    #[allow(dead_code)] // TODO: implement mmap response handling
     ProvideMmap {
         tag: u32,
         offset: u64,

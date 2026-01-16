@@ -29,6 +29,7 @@ static HANDLES: RwLock<L1, HashMap<usize, Handle>> =
     RwLock::new(HashMap::with_hasher(DefaultHashBuilder::new()));
 
 /// Add to the input queue
+#[allow(dead_code)] // TODO: wire up serio input on aarch64
 pub fn serio_input(index: usize, data: u8, token: &mut CleanLockToken) {
     crate::profiling::serio_command(index, data);
 

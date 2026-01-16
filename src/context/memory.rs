@@ -2784,6 +2784,7 @@ enum PageQueueEntry {
         phys_contiguous_count: Option<NonZeroUsize>,
     },
     Other {
+        #[allow(dead_code)] // TODO: implement TLB shootdown handling
         actions: TlbShootdownActions,
         //page: Page,
     },

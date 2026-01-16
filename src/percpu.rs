@@ -33,6 +33,7 @@ pub struct PercpuBlock {
 
     // TODO: Put mailbox queues here, e.g. for TLB shootdown? Just be sure to 128-byte align it
     // first to avoid cache invalidation.
+    #[allow(dead_code)] // TODO: wire up profiling
     pub profiling: Option<&'static crate::profiling::RingBuffer>,
 
     pub ptrace_flags: Cell<PtraceFlags>,
@@ -41,6 +42,7 @@ pub struct PercpuBlock {
 
     pub syscall_debug_info: Cell<SyscallDebugInfo>,
 
+    #[allow(dead_code)] // Architecture-specific, used on some platforms
     pub misc_arch_info: crate::device::ArchPercpuMisc,
 
     pub stats: CpuStats,

@@ -63,6 +63,7 @@ pub enum HardBlockedReason {
     /// "SIGSTOP", only procmgr is allowed to switch contexts this state
     Stopped,
     AwaitingMmap {
+        #[allow(dead_code)] // TODO: use for mmap completion
         file_ref: GrantFileRef,
     },
     // TODO: PageFaultOom?

@@ -56,6 +56,7 @@ static DATA: Once<Box<[u8]>> = Once::new();
 static KSTOP_WAITCOND: WaitCondition = WaitCondition::new();
 static KSTOP_FLAG: Mutex<bool> = Mutex::new(false);
 
+#[allow(dead_code)] // TODO: wire up ACPI shutdown on aarch64
 pub fn register_kstop(token: &mut CleanLockToken) -> bool {
     *KSTOP_FLAG.lock() = true;
     let mut waiters_awoken = KSTOP_WAITCOND.notify(token);

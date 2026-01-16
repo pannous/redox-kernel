@@ -144,6 +144,7 @@ impl<const WRITE: bool> UserSlice<true, WRITE> {
             .copy_to_slice(&mut ret)?;
         Ok(u32::from_ne_bytes(ret))
     }
+    #[allow(dead_code)] // Symmetric with read_u32, may be used in future
     pub fn read_u64(self) -> Result<u64> {
         let mut ret = 0_u64.to_ne_bytes();
         self.limit(8)

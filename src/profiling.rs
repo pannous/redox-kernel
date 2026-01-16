@@ -1,3 +1,5 @@
+#![allow(dead_code)] // Profiling infrastructure not yet wired up on aarch64
+
 #[cfg(feature = "profiling")]
 use core::sync::atomic::AtomicU32;
 use core::{
