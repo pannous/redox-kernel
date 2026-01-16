@@ -39,7 +39,7 @@
 #![deny(unreachable_patterns)]
 // Ensure that all must_use results are used
 #![deny(unused_must_use)]
-#![warn(static_mut_refs)] // FIXME deny once all occurrences are fixed
+#![allow(static_mut_refs)] // FIXME deny once IRQ_CHIP is wrapped in safe abstraction
 #![feature(if_let_guard)]
 #![feature(int_roundings)]
 #![feature(iter_next_chunk)]
