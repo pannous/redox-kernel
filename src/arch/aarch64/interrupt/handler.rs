@@ -387,9 +387,9 @@ macro_rules! exception_stack {
         #[unsafe(naked)]
         #[unsafe(no_mangle)]
         pub unsafe extern "C" fn $name(stack: &mut $crate::arch::aarch64::interrupt::InterruptStack) {
-            unsafe extern "C" fn inner($stack: &mut $crate::arch::aarch64::interrupt::InterruptStack) { unsafe {
+            unsafe extern "C" fn inner($stack: &mut $crate::arch::aarch64::interrupt::InterruptStack) {
                 $code
-            }}
+            }
             core::arch::naked_asm!(concat!(
                 // Backup all userspace registers to stack
                 push_preserved!(),

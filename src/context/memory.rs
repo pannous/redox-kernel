@@ -299,9 +299,7 @@ impl AddrSpaceWrapper {
             // Sync instruction cache after making pages executable (required for HVF)
             if flags.contains(MapFlags::PROT_EXEC) {
                 let span = grant.span();
-                unsafe {
-                    RmmA::sync_icache(span.base.start_address(), span.count * crate::memory::PAGE_SIZE);
-                }
+                RmmA::sync_icache(span.base.start_address(), span.count * crate::memory::PAGE_SIZE);
             }
 
             //info!("Mprotect grant became {:#?}", grant);
@@ -726,12 +724,10 @@ impl AddrSpace {
 
         // Sync instruction cache after mapping executable pages (required for HVF)
         if flags.contains(MapFlags::PROT_EXEC) {
-            unsafe {
-                RmmA::sync_icache(
-                    selected_span.base.start_address(),
-                    selected_span.count * crate::memory::PAGE_SIZE,
-                );
-            }
+            RmmA::sync_icache(
+                selected_span.base.start_address(),
+                selected_span.count * crate::memory::PAGE_SIZE,
+            );
         }
 
         Ok(selected_span.base)
