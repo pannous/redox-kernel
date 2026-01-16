@@ -107,6 +107,11 @@ unsafe extern "C" fn start(args_ptr: *const KernelArgs) -> ! {
                 0x10000000, 0x30000000,
                 crate::startup::memory::BootloaderMemoryKind::Device
             );
+            // QEMU virt highmem PCI ECAM at 0x4010000000 (256 MB for 256 buses)
+            crate::startup::memory::register_memory_region(
+                0x40_1000_0000, 0x1000_0000,
+                crate::startup::memory::BootloaderMemoryKind::Device
+            );
 
             // Initialize RMM
             crate::startup::memory::init(&args, None, None);
