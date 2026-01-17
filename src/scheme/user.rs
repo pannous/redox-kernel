@@ -86,6 +86,10 @@ const ONE: NonZeroUsize = match NonZeroUsize::new(1) {
     None => unreachable!(),
 };
 
+/// Default timeout for user scheme getdents calls (5 seconds in nanoseconds).
+/// This prevents `ls /scheme/` from hanging indefinitely when a driver is unresponsive.
+const GETDENTS_TIMEOUT_NS: u128 = 5_000_000_000;
+
 enum ParsedCqe {
     TriggerFevent {
         number: usize,
@@ -1860,7 +1864,9 @@ impl KernelScheme for UserScheme {
         // iterate backwards without first interating forward? The last entry will contain the
         // opaque id to pass to the next getdents. Since this field is small, this would fit in the
         // extra_raw field of `Cqe`s.
-        let result = inner.call(
+        //
+        // Use timeout to prevent hanging on unresponsive user scheme drivers.
+        let result = inner.call_timeout(
             Opcode::Getdents,
             [
                 file,
@@ -1870,6 +1876,7 @@ impl KernelScheme for UserScheme {
                 opaque_id_start as usize,
             ],
             address.span(),
+            Some(GETDENTS_TIMEOUT_NS),
             token,
         );
         address.release()?;
