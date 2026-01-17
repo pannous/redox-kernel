@@ -64,6 +64,9 @@ enum State {
         fds: Option<Vec<Arc<RwLock<FileDescription>>>>,
         callee_responsible: PageSpan,
         canceling: bool,
+        /// Absolute monotonic time (in nanoseconds) when this request should timeout.
+        /// If set, the scheduler will auto-unblock the context at this time.
+        timeout_expiry: Option<u128>,
     },
     Responded(Response),
     Fmap(Weak<ContextLock>),
