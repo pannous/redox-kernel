@@ -86,9 +86,9 @@ const ONE: NonZeroUsize = match NonZeroUsize::new(1) {
     None => unreachable!(),
 };
 
-/// Default timeout for user scheme getdents calls (5 seconds in nanoseconds).
-/// This prevents `ls /scheme/` from hanging indefinitely when a driver is unresponsive.
-const GETDENTS_TIMEOUT_NS: u128 = 5_000_000_000;
+/// Default timeout for user scheme calls (5 seconds in nanoseconds).
+/// This prevents operations from hanging indefinitely when a driver is unresponsive.
+const USER_SCHEME_TIMEOUT_NS: u128 = 5_000_000_000;
 
 enum ParsedCqe {
     TriggerFevent {
@@ -1513,7 +1513,7 @@ impl KernelScheme for UserScheme {
             Opcode::Open,
             [address.base(), address.len(), flags],
             address.span(),
-            None,
+            Some(USER_SCHEME_TIMEOUT_NS),
             token,
         )? {
             Response::Regular(code, fl) => Ok({
@@ -1545,7 +1545,7 @@ impl KernelScheme for UserScheme {
             Opcode::OpenAt,
             [file, address.base(), address.len(), flags, fcntl_flags as _],
             address.span(),
-            None,
+            Some(USER_SCHEME_TIMEOUT_NS),
             token,
         );
 
@@ -1745,7 +1745,7 @@ impl KernelScheme for UserScheme {
             Opcode::Dup,
             [file, address.base(), address.len()],
             address.span(),
-            None,
+            Some(USER_SCHEME_TIMEOUT_NS),
             token,
         );
 
@@ -1766,10 +1766,11 @@ impl KernelScheme for UserScheme {
     fn kfpath(&self, file: usize, buf: UserSliceWo, token: &mut CleanLockToken) -> Result<usize> {
         let inner = self.inner.upgrade().ok_or(Error::new(ENODEV))?;
         let mut address = inner.capture_user(buf, token)?;
-        let result = inner.call(
+        let result = inner.call_timeout(
             Opcode::Fpath,
             [file, address.base(), address.len()],
             address.span(),
+            Some(USER_SCHEME_TIMEOUT_NS),
             token,
         );
         address.release()?;
@@ -1876,7 +1877,7 @@ impl KernelScheme for UserScheme {
                 opaque_id_start as usize,
             ],
             address.span(),
-            Some(GETDENTS_TIMEOUT_NS),
+            Some(USER_SCHEME_TIMEOUT_NS),
             token,
         );
         address.release()?;
@@ -1885,10 +1886,11 @@ impl KernelScheme for UserScheme {
     fn kfstat(&self, file: usize, stat: UserSliceWo, token: &mut CleanLockToken) -> Result<()> {
         let inner = self.inner.upgrade().ok_or(Error::new(ENODEV))?;
         let mut address = inner.capture_user(stat, token)?;
-        let result = inner.call(
+        let result = inner.call_timeout(
             Opcode::Fstat,
             [file, address.base(), address.len()],
             address.span(),
+            Some(USER_SCHEME_TIMEOUT_NS),
             token,
         );
         address.release()?;
@@ -1897,10 +1899,11 @@ impl KernelScheme for UserScheme {
     fn kfstatvfs(&self, file: usize, stat: UserSliceWo, token: &mut CleanLockToken) -> Result<()> {
         let inner = self.inner.upgrade().ok_or(Error::new(ENODEV))?;
         let mut address = inner.capture_user(stat, token)?;
-        let result = inner.call(
+        let result = inner.call_timeout(
             Opcode::Fstatvfs,
             [file, address.base(), address.len()],
             address.span(),
+            Some(USER_SCHEME_TIMEOUT_NS),
             token,
         );
         address.release()?;
