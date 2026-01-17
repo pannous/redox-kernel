@@ -39,6 +39,7 @@ use crate::{
         flag::{EventFlags, MapFlags, EVENT_READ, O_NONBLOCK, PROT_READ},
         usercopy::{UserSlice, UserSliceRo, UserSliceRw, UserSliceWo},
     },
+    time,
 };
 
 use super::{CallerCtx, FileHandle, KernelScheme, OpenResult};
@@ -203,8 +204,21 @@ impl UserInner {
         caller_responsible: &mut PageSpan,
         token: &mut CleanLockToken,
     ) -> Result<usize> {
+        self.call_timeout(opcode, args, caller_responsible, None, token)
+    }
+
+    /// Same as `call()` but with an optional timeout in nanoseconds.
+    /// Returns ETIMEDOUT if the scheme doesn't respond within the timeout.
+    pub fn call_timeout(
+        &self,
+        opcode: Opcode,
+        args: impl Args,
+        caller_responsible: &mut PageSpan,
+        timeout_ns: Option<u128>,
+        token: &mut CleanLockToken,
+    ) -> Result<usize> {
         let ctx = { context::current().read(token.token()).caller_ctx() };
-        match self.call_extended(ctx, None, opcode, args, caller_responsible, token)? {
+        match self.call_extended(ctx, None, opcode, args, caller_responsible, timeout_ns, token)? {
             Response::Regular(code, _) => Error::demux(code),
             Response::Fd(_) => Err(Error::new(EIO)),
             Response::MultipleFds(_) => Err(Error::new(EIO)),
@@ -218,6 +232,7 @@ impl UserInner {
         opcode: Opcode,
         args: impl Args,
         caller_responsible: &mut PageSpan,
+        timeout_ns: Option<u128>,
         token: &mut CleanLockToken,
     ) -> Result<Response> {
         let next_id = self.next_id()?;
@@ -236,6 +251,7 @@ impl UserInner {
                 },
             },
             caller_responsible,
+            timeout_ns,
             token,
         )
     }
@@ -245,11 +261,15 @@ impl UserInner {
         fds: Option<Vec<Arc<RwLock<FileDescription>>>>,
         sqe: Sqe,
         caller_responsible: &mut PageSpan,
+        timeout_ns: Option<u128>,
         token: &mut CleanLockToken,
     ) -> Result<Response> {
         if self.unmounting.load(Ordering::SeqCst) {
             return Err(Error::new(ENODEV));
         }
+
+        // Calculate absolute timeout expiry (monotonic nanoseconds)
+        let timeout_expiry = timeout_ns.map(|ns| time::monotonic() + ns);
 
         {
             // Disable preemption to avoid context switches between setting the
@@ -260,15 +280,19 @@ impl UserInner {
             let current_context = context::current();
             let mut preempt = PreemptGuard::new(&current_context, token);
             let token = preempt.token();
-            current_context
-                .write(token.token())
-                .block("UserInner::call");
+            {
+                let mut context = current_context.write(token.token());
+                // Set scheduler wake time for timeout (same pattern as futex)
+                context.wake = timeout_expiry;
+                context.block("UserInner::call");
+            }
             {
                 let mut states = self.states.lock();
                 states[sqe.tag as usize] = State::Waiting {
                     context: Arc::downgrade(&current_context),
                     fds,
                     canceling: false,
+                    timeout_expiry,
 
                     // This is the part that the scheme handler will deallocate when responding. It
                     // starts as empty, so the caller can unmap it (optimal for TLB), but is populated
@@ -306,12 +330,13 @@ impl UserInner {
                     // invalid state
                     None => return Err(Error::new(EBADFD)),
                     Some(o) => match mem::replace(o, State::Placeholder) {
-                        // signal wakeup while awaiting cancelation
+                        // signal/timeout wakeup while awaiting cancelation
                         State::Waiting {
                             canceling: true,
                             mut callee_responsible,
                             context,
                             fds,
+                            timeout_expiry,
                         } => {
                             let maybe_eintr = eintr_if_sigkill(&mut callee_responsible);
                             *o = State::Waiting {
@@ -319,6 +344,7 @@ impl UserInner {
                                 callee_responsible,
                                 context,
                                 fds,
+                                timeout_expiry,
                             };
 
                             maybe_eintr?;
@@ -332,15 +358,21 @@ impl UserInner {
                             // wakeup.
                             drop(states);
                         }
-                        // spurious wakeup
+                        // spurious wakeup or timeout wakeup (not yet canceling)
                         State::Waiting {
                             canceling: false,
                             fds,
                             context,
                             mut callee_responsible,
+                            timeout_expiry,
                         } => {
                             let maybe_eintr = eintr_if_sigkill(&mut callee_responsible);
                             let current_context = context::current();
+
+                            // Check if this wakeup is due to timeout
+                            let timed_out = timeout_expiry
+                                .map(|expiry| time::monotonic() >= expiry)
+                                .unwrap_or(false);
 
                             *o = State::Waiting {
                                 // Currently we treat all spurious wakeups to have the same behavior
@@ -348,14 +380,19 @@ impl UserInner {
                                 // that should happen, but it certainly can happen, for example if a context
                                 // is awoken through its thread handle without setting any sig bits, or if the
                                 // caller clears its own sig bits. If it actually is a signal, then it is the
-                                // intended behavior.
+                                // intended behavior. Timeouts also trigger cancellation.
                                 canceling: true,
                                 fds,
                                 context,
                                 callee_responsible,
+                                timeout_expiry,
                             };
 
-                            maybe_eintr?;
+                            // Only return EINTR for signals if we haven't timed out
+                            // (timeout takes precedence, will return ETIMEDOUT later)
+                            if !timed_out {
+                                maybe_eintr?;
+                            }
 
                             // We do not want to preempt between sending the
                             // cancellation and blocking again where we might
@@ -398,6 +435,23 @@ impl UserInner {
 
                         State::Responded(response) => {
                             states.remove(sqe.tag as usize);
+
+                            // Check if we timed out (scheduler clears wake on timeout)
+                            // If timeout was set and wake is now None, we timed out.
+                            // Return ETIMEDOUT if the response is a cancel acknowledgement.
+                            if let Response::Regular(code, _) = &response {
+                                let is_canceled = *code == Error::mux(Err(Error::new(ECANCELED)))
+                                    || *code == Error::mux(Err(Error::new(EINTR)));
+                                if is_canceled && timeout_expiry.is_some() {
+                                    let context = context::current();
+                                    let ctx = context.read(token.token());
+                                    // Scheduler clears wake on timeout
+                                    if ctx.wake.is_none() {
+                                        return Err(Error::new(ETIMEDOUT));
+                                    }
+                                }
+                            }
+
                             return Ok(response);
                         }
                     },
@@ -940,6 +994,7 @@ impl UserInner {
                         mut fds,
                         canceling,
                         callee_responsible,
+                        timeout_expiry: _,
                     } => {
                         // Convert ECANCELED to EINTR if a request was being canceled (currently always
                         // due to signals).
@@ -1076,6 +1131,7 @@ impl UserInner {
                 caller: pid as u64,
             },
             &mut PageSpan::empty(),
+            None,
             token,
         )?;
 
@@ -1453,6 +1509,7 @@ impl KernelScheme for UserScheme {
             Opcode::Open,
             [address.base(), address.len(), flags],
             address.span(),
+            None,
             token,
         )? {
             Response::Regular(code, fl) => Ok({
@@ -1484,6 +1541,7 @@ impl KernelScheme for UserScheme {
             Opcode::OpenAt,
             [file, address.base(), address.len(), flags, fcntl_flags as _],
             address.span(),
+            None,
             token,
         );
 
@@ -1683,6 +1741,7 @@ impl KernelScheme for UserScheme {
             Opcode::Dup,
             [file, address.base(), address.len()],
             address.span(),
+            None,
             token,
         );
 
@@ -1869,6 +1928,7 @@ impl KernelScheme for UserScheme {
             Opcode::Munmap,
             [number, size, flags.bits(), offset],
             &mut PageSpan::empty(),
+            None,
             token,
         )?;
 
@@ -1911,7 +1971,7 @@ impl KernelScheme for UserScheme {
             let len = dst.len().min(metadata.len());
             dst[..len].copy_from_slice(&metadata[..len]);
         }
-        let res = inner.call_extended_inner(None, sqe, address.span(), token)?;
+        let res = inner.call_extended_inner(None, sqe, address.span(), None, token)?;
 
         match res {
             Response::Regular(res, _) => Error::demux(res),
@@ -1943,6 +2003,7 @@ impl KernelScheme for UserScheme {
             Opcode::Sendfd,
             [number, sendfd_flags.bits(), arg as usize, len],
             &mut PageSpan::empty(),
+            None,
             token,
         )?;
 
@@ -1978,6 +2039,7 @@ impl KernelScheme for UserScheme {
             Opcode::Recvfd,
             [id, recvfd_flags.bits(), len],
             &mut PageSpan::empty(),
+            None,
             token,
         )?;
 
