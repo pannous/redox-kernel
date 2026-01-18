@@ -33,9 +33,9 @@ use self::acpi::AcpiScheme;
 use self::dtb::DtbScheme;
 
 use self::{
-    debug::DebugScheme, event::EventScheme, irq::IrqScheme, memory::MemoryScheme, pipe::PipeScheme,
-    proc::ProcScheme, root::RootScheme, serio::SerioScheme, sys::SysScheme, time::TimeScheme,
-    user::UserScheme,
+    debug::DebugScheme, event::EventScheme, irq::IrqScheme, memory::MemoryScheme, null::NullScheme,
+    pipe::PipeScheme, proc::ProcScheme, root::RootScheme, serio::SerioScheme, sys::SysScheme,
+    time::TimeScheme, user::UserScheme,
 };
 
 /// When compiled with the "acpi" feature - `acpi:` - allows drivers to read a limited set of ACPI tables.
@@ -55,6 +55,9 @@ pub mod irq;
 
 /// `memory:` - a scheme for accessing physical memory
 pub mod memory;
+
+/// `null:` - minimal scheme for measuring syscall overhead
+pub mod null;
 
 /// `pipe:` - used internally by the kernel to implement `pipe`
 pub mod pipe;
@@ -219,6 +222,7 @@ impl SchemeList {
         self.insert_global(ns, "debug", GlobalSchemes::Debug);
         self.insert_global(ns, "irq", GlobalSchemes::Irq);
         self.insert_global(ns, "kernel.proc", GlobalSchemes::Proc);
+        self.insert_global(ns, "null", GlobalSchemes::Null);
         self.insert_global(ns, "serio", GlobalSchemes::Serio);
     }
 
@@ -641,6 +645,7 @@ pub enum GlobalSchemes {
     Debug = 1,
     Event,
     Memory,
+    Null,
     Pipe,
     Serio,
     Irq,
@@ -680,6 +685,7 @@ impl core::ops::Deref for GlobalSchemes {
             Self::Debug => &DebugScheme,
             Self::Event => &EventScheme,
             Self::Memory => &MemoryScheme,
+            Self::Null => &NullScheme,
             Self::Pipe => &PipeScheme,
             Self::Serio => &SerioScheme,
             Self::Irq => &IrqScheme,
