@@ -112,13 +112,16 @@ pub fn open(raw_path: UserSliceRo, flags: usize, token: &mut CleanLockToken) -> 
 
     // Check VFS cache for negative (ENOENT) entries
     // This avoids expensive lookups for files that don't exist
-    if let Some(CachedLookup::NotFound { .. }) = vfs_cache::cache_lookup(
-        scheme_ns,
-        scheme_name.as_ref(),
-        reference.as_ref(),
-        token,
-    ) {
-        return Err(Error::new(ENOENT));
+    // Skip cache check if O_CREAT is set since we want to create the file
+    if flags & O_CREAT == 0 {
+        if let Some(CachedLookup::NotFound { .. }) = vfs_cache::cache_lookup(
+            scheme_ns,
+            scheme_name.as_ref(),
+            reference.as_ref(),
+            token,
+        ) {
+            return Err(Error::new(ENOENT));
+        }
     }
 
     let description = {
@@ -147,6 +150,17 @@ pub fn open(raw_path: UserSliceRo, flags: usize, token: &mut CleanLockToken) -> 
                     token,
                 );
             }
+        }
+
+        // Invalidate cache when file is created with O_CREAT
+        // This ensures any stale negative cache entry is cleared
+        if result.is_ok() && (flags & O_CREAT != 0) {
+            vfs_cache::cache_invalidate(
+                scheme_ns,
+                scheme_name.as_ref(),
+                reference.as_ref(),
+                token,
+            );
         }
 
         match result? {
@@ -673,7 +687,15 @@ pub fn frename(fd: FileHandle, raw_path: UserSliceRo, token: &mut CleanLockToken
         return Err(Error::new(EXDEV));
     }
 
-    scheme.frename(description.number, reference.as_ref(), caller_ctx, token)
+    let result = scheme.frename(description.number, reference.as_ref(), caller_ctx, token);
+
+    // Invalidate cache entry for the destination path on successful rename
+    // The destination now exists (or has been overwritten), so clear any stale cache
+    if result.is_ok() {
+        vfs_cache::cache_invalidate(scheme_ns, scheme_name.as_ref(), reference.as_ref(), token);
+    }
+
+    result
 }
 
 /// File status

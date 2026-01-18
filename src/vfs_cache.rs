@@ -202,9 +202,8 @@ impl VfsCache {
 
 /// Get current monotonic time in nanoseconds
 fn current_time_ns() -> u64 {
-    // Use kernel's time module
-    let timespec = time::monotonic();
-    timespec.tv_sec as u64 * 1_000_000_000 + timespec.tv_nsec as u64
+    // Use kernel's time module - returns nanoseconds as u128
+    time::monotonic() as u64
 }
 
 /// Global VFS cache instance
