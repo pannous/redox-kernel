@@ -16,6 +16,7 @@ use crate::{
     scheme::{self, CallerCtx, FileHandle, KernelScheme, OpenResult, StrOrBytes},
     sync::CleanLockToken,
     syscall::{data::Stat, error::*, flag::*},
+    vfs_cache::{self, CachedLookup},
 };
 
 use super::usercopy::{UserSlice, UserSliceRo, UserSliceRw, UserSliceWo};
@@ -109,6 +110,17 @@ pub fn open(raw_path: UserSliceRo, flags: usize, token: &mut CleanLockToken) -> 
     let path = RedoxPath::from_absolute(&path_buf).ok_or(Error::new(EINVAL))?;
     let (scheme_name, reference) = path.as_parts().ok_or(Error::new(EINVAL))?;
 
+    // Check VFS cache for negative (ENOENT) entries
+    // This avoids expensive lookups for files that don't exist
+    if let Some(CachedLookup::NotFound { .. }) = vfs_cache::cache_lookup(
+        scheme_ns,
+        scheme_name.as_ref(),
+        reference.as_ref(),
+        token,
+    ) {
+        return Err(Error::new(ENOENT));
+    }
+
     let description = {
         let (scheme_id, scheme) = {
             let schemes = scheme::schemes(token.token());
@@ -118,12 +130,26 @@ pub fn open(raw_path: UserSliceRo, flags: usize, token: &mut CleanLockToken) -> 
             (scheme_id, scheme.clone())
         };
 
-        match scheme.kopen(
+        let result = scheme.kopen(
             reference.as_ref(),
             flags,
             CallerCtx { uid, gid, pid },
             token,
-        )? {
+        );
+
+        // Cache ENOENT results to speed up future lookups of non-existent files
+        if let Err(ref e) = result {
+            if e.errno == ENOENT {
+                vfs_cache::cache_insert_negative(
+                    scheme_ns,
+                    scheme_name.as_ref(),
+                    reference.as_ref(),
+                    token,
+                );
+            }
+        }
+
+        match result? {
             OpenResult::SchemeLocal(number, internal_flags) => {
                 Arc::new(RwLock::new(FileDescription {
                     scheme: scheme_id,

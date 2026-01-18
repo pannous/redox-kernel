@@ -135,6 +135,9 @@ mod syscall;
 /// Time
 mod time;
 
+/// VFS path caching
+mod vfs_cache;
+
 #[cfg_attr(not(test), global_allocator)]
 static ALLOCATOR: allocator::Allocator = allocator::Allocator;
 
