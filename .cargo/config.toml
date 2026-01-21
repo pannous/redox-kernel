@@ -1,0 +1,4 @@
+# Target features for aarch64 builds
+# neon is required for proper ABI on aarch64
+[build]
+rustflags = ["-Ctarget-feature=+v8a,+strict-align,+neon,+fp-armv8"]
