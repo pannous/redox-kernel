@@ -87,10 +87,9 @@ pub fn tick(token: &mut CleanLockToken) {
     let new_ticks = ticks_cell.get() + 1;
     ticks_cell.set(new_ticks);
 
-    // Trigger a context switch after every 3 ticks (~30ms at 100Hz).
-    // Note: Testing showed that faster switching (threshold=1) only provides ~16% improvement
-    // and can cause stability issues. The bulk of process startup time is in dynamic linking.
-    if new_ticks >= 3 {
+    // Trigger a context switch every tick (~10ms at 100Hz).
+    // Previous threshold=3 (30ms) caused significant IPC latency for file operations.
+    if new_ticks >= 1 {
         switch(token);
         crate::context::signal::signal_handler(token);
     }
