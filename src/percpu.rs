@@ -39,6 +39,8 @@ pub struct PercpuBlock {
     pub ptrace_flags: Cell<PtraceFlags>,
     pub ptrace_session: RefCell<Option<Weak<Session>>>,
     pub inside_syscall: Cell<bool>,
+    /// Set when a context is unblocked and we should switch after syscall returns
+    pub switch_pending: Cell<bool>,
 
     pub syscall_debug_info: Cell<SyscallDebugInfo>,
 
@@ -180,6 +182,7 @@ impl PercpuBlock {
             ptrace_flags: Cell::new(PtraceFlags::empty()),
             ptrace_session: RefCell::new(None),
             inside_syscall: Cell::new(false),
+            switch_pending: Cell::new(false),
 
             syscall_debug_info: Cell::new(SyscallDebugInfo::default()),
 

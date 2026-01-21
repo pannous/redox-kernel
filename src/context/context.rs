@@ -238,6 +238,11 @@ impl Context {
     /// Unblock context, and return true if it was blocked before being marked runnable
     pub fn unblock(&mut self) -> bool {
         if self.unblock_no_ipi() {
+            // Set switch_pending to trigger immediate context switch after syscall returns.
+            // This dramatically reduces IPC latency - without this, the unblocked context
+            // would have to wait for the next timer tick (up to 30ms at 100Hz).
+            PercpuBlock::current().switch_pending.set(true);
+
             // TODO: Only send IPI if currently running?
             if let Some(cpu_id) = self.cpu_id {
                 if cpu_id != crate::cpu_id() {

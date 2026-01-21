@@ -2,8 +2,9 @@ use ::syscall::Exception;
 use rmm::VirtualAddress;
 
 use crate::{
-    context::signal::excp_handler,
+    context::{self, signal::excp_handler},
     memory::{ArchIntCtx, GenericPfFlags},
+    percpu::PercpuBlock,
     sync::CleanLockToken,
     syscall,
 };
@@ -195,6 +196,12 @@ exception_stack!(synchronous_exception_at_el0, |stack| {
                     &mut token,
                 );
                 stack.scratch.x0 = ret;
+
+                // Check for pending context switch (another context was unblocked during syscall).
+                // This provides immediate IPC response instead of waiting for timer tick (up to 30ms).
+                if PercpuBlock::current().switch_pending.take() {
+                    context::switch(&mut token);
+                }
             }
 
             ty => {

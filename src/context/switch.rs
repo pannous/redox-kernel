@@ -87,9 +87,9 @@ pub fn tick(token: &mut CleanLockToken) {
     let new_ticks = ticks_cell.get() + 1;
     ticks_cell.set(new_ticks);
 
-    // Trigger a context switch every tick (~10ms at 100Hz).
-    // Previous threshold=3 (30ms) caused significant IPC latency for file operations.
-    if new_ticks >= 1 {
+    // Trigger a context switch every 3 ticks (~30ms at 100Hz).
+    // IPC latency is handled by switch_pending flag set in unblock(), not by reducing this threshold.
+    if new_ticks >= 3 {
         switch(token);
         crate::context::signal::signal_handler(token);
     }
