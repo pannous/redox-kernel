@@ -6,6 +6,10 @@
 //!
 //! The cache significantly improves performance by avoiding repeated tree walks
 //! in userspace filesystem drivers.
+//!
+//! NOTE: This module is prepared infrastructure, not yet integrated into syscalls.
+
+#![allow(dead_code)]
 
 use alloc::{collections::BTreeMap, string::String, vec::Vec};
 use core::sync::atomic::{AtomicU64, Ordering};

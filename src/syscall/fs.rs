@@ -16,7 +16,7 @@ use crate::{
     scheme::{self, CallerCtx, FileHandle, KernelScheme, OpenResult, StrOrBytes},
     sync::CleanLockToken,
     syscall::{data::Stat, error::*, flag::*},
-    vfs_cache::{self, CachedLookup},
+    vfs_cache,
 };
 
 use super::usercopy::{UserSlice, UserSliceRo, UserSliceRw, UserSliceWo};
