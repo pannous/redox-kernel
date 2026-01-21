@@ -110,19 +110,20 @@ pub fn open(raw_path: UserSliceRo, flags: usize, token: &mut CleanLockToken) -> 
     let path = RedoxPath::from_absolute(&path_buf).ok_or(Error::new(EINVAL))?;
     let (scheme_name, reference) = path.as_parts().ok_or(Error::new(EINVAL))?;
 
+    // DISABLED FOR DEBUGGING - VFS cache lookup
     // Check VFS cache for negative (ENOENT) entries
     // This avoids expensive lookups for files that don't exist
     // Skip cache check if O_CREAT is set since we want to create the file
-    if flags & O_CREAT == 0 {
-        if let Some(CachedLookup::NotFound { .. }) = vfs_cache::cache_lookup(
-            scheme_ns,
-            scheme_name.as_ref(),
-            reference.as_ref(),
-            token,
-        ) {
-            return Err(Error::new(ENOENT));
-        }
-    }
+    // if flags & O_CREAT == 0 {
+    //     if let Some(CachedLookup::NotFound { .. }) = vfs_cache::cache_lookup(
+    //         scheme_ns,
+    //         scheme_name.as_ref(),
+    //         reference.as_ref(),
+    //         token,
+    //     ) {
+    //         return Err(Error::new(ENOENT));
+    //     }
+    // }
 
     let description = {
         let (scheme_id, scheme) = {
@@ -140,28 +141,29 @@ pub fn open(raw_path: UserSliceRo, flags: usize, token: &mut CleanLockToken) -> 
             token,
         );
 
+        // DISABLED FOR DEBUGGING - cache insert/invalidate
         // Cache ENOENT results to speed up future lookups of non-existent files
-        if let Err(ref e) = result {
-            if e.errno == ENOENT {
-                vfs_cache::cache_insert_negative(
-                    scheme_ns,
-                    scheme_name.as_ref(),
-                    reference.as_ref(),
-                    token,
-                );
-            }
-        }
-
-        // Invalidate cache when file is created with O_CREAT
-        // This ensures any stale negative cache entry is cleared
-        if result.is_ok() && (flags & O_CREAT != 0) {
-            vfs_cache::cache_invalidate(
-                scheme_ns,
-                scheme_name.as_ref(),
-                reference.as_ref(),
-                token,
-            );
-        }
+        // if let Err(ref e) = result {
+        //     if e.errno == ENOENT {
+        //         vfs_cache::cache_insert_negative(
+        //             scheme_ns,
+        //             scheme_name.as_ref(),
+        //             reference.as_ref(),
+        //             token,
+        //         );
+        //     }
+        // }
+        //
+        // // Invalidate cache when file is created with O_CREAT
+        // // This ensures any stale negative cache entry is cleared
+        // if result.is_ok() && (flags & O_CREAT != 0) {
+        //     vfs_cache::cache_invalidate(
+        //         scheme_ns,
+        //         scheme_name.as_ref(),
+        //         reference.as_ref(),
+        //         token,
+        //     );
+        // }
 
         match result? {
             OpenResult::SchemeLocal(number, internal_flags) => {
