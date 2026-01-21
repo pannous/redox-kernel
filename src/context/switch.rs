@@ -148,12 +148,22 @@ pub fn switch(token: &mut CleanLockToken) -> SwitchResult {
     // Acquire the global lock to ensure exclusive access during context switch and avoid
     // issues that would be caused by the unsafe operations below
     // TODO: Better memory orderings?
-    while arch::CONTEXT_SWITCH_LOCK
-        .compare_exchange_weak(false, true, Ordering::SeqCst, Ordering::Relaxed)
-        .is_err()
     {
-        hint::spin_loop();
-        percpu.maybe_handle_tlb_shootdown();
+        use core::sync::atomic::AtomicU64;
+        static SPIN_COUNTER: AtomicU64 = AtomicU64::new(0);
+        let mut local_spins = 0u64;
+        while arch::CONTEXT_SWITCH_LOCK
+            .compare_exchange_weak(false, true, Ordering::SeqCst, Ordering::Relaxed)
+            .is_err()
+        {
+            local_spins += 1;
+            let total = SPIN_COUNTER.fetch_add(1, Ordering::Relaxed);
+            if total % 10_000_000 == 0 {
+                println!("CS_LOCK spin: total={} local={}", total, local_spins);
+            }
+            hint::spin_loop();
+            percpu.maybe_handle_tlb_shootdown();
+        }
     }
 
     let cpu_id = crate::cpu_id();

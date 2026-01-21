@@ -239,14 +239,26 @@ fn kmain_ap(cpu_id: crate::cpu_set::LogicalCpuId) -> ! {
     run_userspace(&mut token);
 }
 fn run_userspace(token: &mut CleanLockToken) -> ! {
+    use core::sync::atomic::{AtomicU64, Ordering};
+    static IDLE_SPINS: AtomicU64 = AtomicU64::new(0);
+    static SWITCH_SPINS: AtomicU64 = AtomicU64::new(0);
+
     loop {
         unsafe {
             interrupt::disable();
             match context::switch(token) {
                 SwitchResult::Switched => {
+                    let c = SWITCH_SPINS.fetch_add(1, Ordering::Relaxed);
+                    if c % 1_000_000 == 0 {
+                        println!("run_userspace: switched {} times", c);
+                    }
                     interrupt::enable_and_nop();
                 }
                 SwitchResult::AllContextsIdle => {
+                    let c = IDLE_SPINS.fetch_add(1, Ordering::Relaxed);
+                    if c % 1_000_000 == 0 {
+                        println!("run_userspace: idle spin {} (all contexts idle)", c);
+                    }
                     // Enable interrupts, then halt CPU (to save power) until the next interrupt is actually fired.
                     interrupt::enable_and_halt();
                 }
