@@ -13,7 +13,10 @@ use fdt::Fdt;
 
 use crate::{
     allocator, device, devices::graphical_debug, dtb, paging, startup::KernelArgs,
+    CPU_COUNT,
 };
+
+use core::sync::atomic::Ordering as AtomicOrdering;
 
 /// Test of zero values in BSS.
 static mut BSS_TEST_ZERO: usize = 0;
@@ -22,6 +25,61 @@ static mut DATA_TEST_NONZERO: usize = 0xFFFF_FFFF_FFFF_FFFF;
 
 pub static AP_READY: AtomicBool = AtomicBool::new(false);
 static BSP_READY: AtomicBool = AtomicBool::new(false);
+
+/// Enumerate CPU cores from device tree
+unsafe fn enumerate_cpus_from_dtb(dtb: &Fdt) -> u32 {
+    let mut cpu_count = 0;
+
+    info!("DTB: Starting CPU enumeration from device tree");
+
+    if let Some(cpus_node) = dtb.find_node("/cpus") {
+        info!("DTB: Found /cpus node");
+        // Iterate through all CPU nodes
+        for cpu_node in cpus_node.children() {
+            let name = cpu_node.name;
+            info!("DTB: Checking node: {}", name);
+            if name.starts_with("cpu@") || name == "cpu" {
+                // Get CPU ID from reg property
+                if let Some(reg) = cpu_node.property("reg") {
+                    let cpu_id = reg.as_usize().unwrap_or(cpu_count as usize);
+                    info!("DTB: Found CPU {} (reg={})", cpu_count, cpu_id);
+
+                    // Check if CPU is enabled
+                    let enabled = cpu_node
+                        .property("status")
+                        .and_then(|s| s.as_str())
+                        .map(|s| s == "okay" || s == "ok")
+                        .unwrap_or(true); // Default to enabled if no status property
+
+                    if enabled {
+                        cpu_count += 1;
+
+                        // Log enable-method for debugging
+                        if let Some(method) = cpu_node.property("enable-method").and_then(|m| m.as_str()) {
+                            info!("  enable-method: {}", method);
+                        }
+                    } else {
+                        info!("  CPU {} is disabled", cpu_id);
+                    }
+                } else {
+                    // No reg property, count it anyway
+                    info!("DTB: Found CPU {} (no reg property)", cpu_count);
+                    cpu_count += 1;
+                }
+            }
+        }
+    } else {
+        info!("DTB: /cpus node not found!");
+    }
+
+    if cpu_count == 0 {
+        info!("DTB: No CPUs found in /cpus node, defaulting to 1");
+        cpu_count = 1;
+    }
+
+    info!("DTB: Detected {} CPU(s)", cpu_count);
+    cpu_count
+}
 
 #[repr(C, align(16))]
 struct StackAlign<T>(T);
@@ -128,6 +186,16 @@ unsafe extern "C" fn start(args_ptr: *const KernelArgs) -> ! {
 
             // Activate memory logging
             crate::log::init();
+
+            // Enumerate CPUs from device tree (after logging is initialized)
+            if let Ok(dtb) = &dtb_res {
+                info!("SMP: DTB is available, enumerating CPUs");
+                let detected_cpus = enumerate_cpus_from_dtb(dtb);
+                CPU_COUNT.store(detected_cpus, AtomicOrdering::SeqCst);
+                info!("SMP: CPU_COUNT set to {}", detected_cpus);
+            } else {
+                info!("SMP: No DTB available, CPU_COUNT remains 1");
+            }
 
             // Initialize devices
             match dtb_res {
