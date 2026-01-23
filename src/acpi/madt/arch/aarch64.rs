@@ -17,6 +17,7 @@ pub(super) fn init(madt: Madt) {
         debug!("      {:#x?}", madt_entry);
         match madt_entry {
             MadtEntry::Gicc(gicc) => {
+                debug!("SMP: Found GICC entry (CPU)");
                 giccs.push(gicc);
             }
             MadtEntry::Gicd(gicd) => {
@@ -28,6 +29,13 @@ pub(super) fn init(madt: Madt) {
             }
             _ => {}
         }
+    }
+
+    // Update CPU count based on GICC entries
+    let cpu_count = giccs.len() as u32;
+    if cpu_count > 0 {
+        debug!("SMP: ACPI MADT lists {} CPU(s)", cpu_count);
+        crate::CPU_COUNT.store(cpu_count, core::sync::atomic::Ordering::SeqCst);
     }
     let Some(gicd) = gicd_opt else {
         warn!("No GICD found");
