@@ -26,23 +26,49 @@ static mut DATA_TEST_NONZERO: usize = 0xFFFF_FFFF_FFFF_FFFF;
 pub static AP_READY: AtomicBool = AtomicBool::new(false);
 static BSP_READY: AtomicBool = AtomicBool::new(false);
 
+// Debug markers to track execution
+use core::sync::atomic::AtomicU32;
+static DEBUG_MARKER: AtomicU32 = AtomicU32::new(0);
+
 /// Enumerate CPU cores from device tree
 unsafe fn enumerate_cpus_from_dtb(dtb: &Fdt) -> u32 {
     let mut cpu_count = 0;
 
-    info!("DTB: Starting CPU enumeration from device tree");
+    debug!("DTB: Starting CPU enumeration from device tree");
+
+    // Debug: try to iterate all nodes to see what's there
+    let mut node_count = 0;
+    for node in dtb.all_nodes() {
+        node_count += 1;
+        if node.name.contains("cpu") {
+            debug!("DTB: Found node with 'cpu' in name: {}", node.name);
+        }
+    }
+    debug!("DTB: Total nodes in tree: {}", node_count);
 
     if let Some(cpus_node) = dtb.find_node("/cpus") {
-        info!("DTB: Found /cpus node");
+        debug!("DTB: Found /cpus node");
+
+        // Check address-cells and size-cells
+        if let Some(addr_cells) = cpus_node.property("#address-cells") {
+            debug!("DTB: /cpus #address-cells = {:?}", addr_cells.as_usize());
+        }
+        if let Some(size_cells) = cpus_node.property("#size-cells") {
+            debug!("DTB: /cpus #size-cells = {:?}", size_cells.as_usize());
+        }
+
         // Iterate through all CPU nodes
+        let mut child_count = 0;
         for cpu_node in cpus_node.children() {
+            child_count += 1;
             let name = cpu_node.name;
-            info!("DTB: Checking node: {}", name);
+            debug!("DTB: Child {}: name={}", child_count, name);
+
             if name.starts_with("cpu@") || name == "cpu" {
                 // Get CPU ID from reg property
                 if let Some(reg) = cpu_node.property("reg") {
                     let cpu_id = reg.as_usize().unwrap_or(cpu_count as usize);
-                    info!("DTB: Found CPU {} (reg={})", cpu_count, cpu_id);
+                    debug!("DTB: Found CPU {} (reg={})", cpu_count, cpu_id);
 
                     // Check if CPU is enabled
                     let enabled = cpu_node
@@ -56,28 +82,29 @@ unsafe fn enumerate_cpus_from_dtb(dtb: &Fdt) -> u32 {
 
                         // Log enable-method for debugging
                         if let Some(method) = cpu_node.property("enable-method").and_then(|m| m.as_str()) {
-                            info!("  enable-method: {}", method);
+                            debug!("  enable-method: {}", method);
                         }
                     } else {
-                        info!("  CPU {} is disabled", cpu_id);
+                        debug!("  CPU {} is disabled", cpu_id);
                     }
                 } else {
                     // No reg property, count it anyway
-                    info!("DTB: Found CPU {} (no reg property)", cpu_count);
+                    debug!("DTB: Found CPU {} (no reg property)", cpu_count);
                     cpu_count += 1;
                 }
             }
         }
+        debug!("DTB: /cpus has {} children", child_count);
     } else {
-        info!("DTB: /cpus node not found!");
+        debug!("DTB: /cpus node not found!");
     }
 
     if cpu_count == 0 {
-        info!("DTB: No CPUs found in /cpus node, defaulting to 1");
+        debug!("DTB: No CPUs found in /cpus node, defaulting to 1");
         cpu_count = 1;
     }
 
-    info!("DTB: Detected {} CPU(s)", cpu_count);
+    debug!("DTB: Detected {} CPU(s)", cpu_count);
     cpu_count
 }
 
@@ -132,18 +159,24 @@ unsafe extern "C" fn start(args_ptr: *const KernelArgs) -> ! {
 
             // Get hardware descriptor data
             //TODO: use env {DTB,RSDT}_{BASE,SIZE}?
+            debug!("DTB: hwdesc_base=0x{:x}, hwdesc_size=0x{:x}", args.hwdesc_base, args.hwdesc_size);
             let hwdesc_data = if args.hwdesc_base != 0 {
+                debug!("DTB: Creating hwdesc_data slice");
                 Some(slice::from_raw_parts(
                     (crate::PHYS_OFFSET + args.hwdesc_base as usize) as *const u8,
                     args.hwdesc_size as usize,
                 ))
             } else {
+                debug!("DTB: No hwdesc_base, hwdesc_data is None");
                 None
             };
 
             let dtb_res = hwdesc_data
                 .ok_or(fdt::FdtError::BadPtr)
-                .and_then(|data| Fdt::new(data));
+                .and_then(|data| {
+                    debug!("DTB: Parsing DTB from hwdesc_data, size={}", data.len());
+                    Fdt::new(data)
+                });
 
             // Try to find serial port prior to logging
             if let Ok(dtb) = &dtb_res {
@@ -187,23 +220,22 @@ unsafe extern "C" fn start(args_ptr: *const KernelArgs) -> ! {
             // Activate memory logging
             crate::log::init();
 
-            // Enumerate CPUs from device tree (after logging is initialized)
-            if let Ok(dtb) = &dtb_res {
-                info!("SMP: DTB is available, enumerating CPUs");
-                let detected_cpus = enumerate_cpus_from_dtb(dtb);
-                CPU_COUNT.store(detected_cpus, AtomicOrdering::SeqCst);
-                info!("SMP: CPU_COUNT set to {}", detected_cpus);
-            } else {
-                info!("SMP: No DTB available, CPU_COUNT remains 1");
-            }
-
             // Initialize devices
+            DEBUG_MARKER.store(100, AtomicOrdering::SeqCst);
             match dtb_res {
                 Ok(dtb) => {
+                    DEBUG_MARKER.store(200, AtomicOrdering::SeqCst);
+
+                    // Enumerate CPUs from DTB BEFORE dtb::init
+                    let detected_cpus = enumerate_cpus_from_dtb(&dtb);
+                    DEBUG_MARKER.store(300 + detected_cpus, AtomicOrdering::SeqCst);
+                    CPU_COUNT.store(detected_cpus, AtomicOrdering::SeqCst);
+
                     dtb::init(hwdesc_data.map(|slice| (slice.as_ptr() as usize, slice.len())));
                     device::init_devicetree(&dtb);
                 }
                 Err(err) => {
+                    DEBUG_MARKER.store(999, AtomicOrdering::SeqCst);
                     dtb::init(None);
                     warn!("failed to parse DTB: {}", err);
 
@@ -221,6 +253,11 @@ unsafe extern "C" fn start(args_ptr: *const KernelArgs) -> ! {
 
             args.bootstrap()
         };
+
+        // Debug: verify CPU_COUNT before entering kmain
+        let final_count = CPU_COUNT.load(AtomicOrdering::SeqCst);
+        let marker = DEBUG_MARKER.load(AtomicOrdering::SeqCst);
+        debug!("START: Entering kmain with CPU_COUNT={}, DEBUG_MARKER={}", final_count, marker);
 
         crate::kmain(bootstrap);
     }
