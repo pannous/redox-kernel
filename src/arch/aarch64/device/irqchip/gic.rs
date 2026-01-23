@@ -151,7 +151,7 @@ impl InterruptController for GenericInterruptController {
     }
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone, Copy)]
 pub struct GicDistIf {
     pub address: usize,
     pub ncpus: u32,

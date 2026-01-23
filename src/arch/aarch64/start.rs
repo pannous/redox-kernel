@@ -241,7 +241,9 @@ unsafe extern "C" fn start(args_ptr: *const KernelArgs) -> ! {
 
                     #[cfg(feature = "acpi")]
                     {
+                        info!("START: About to call acpi::init");
                         crate::acpi::init(args.acpi_rsdp());
+                        info!("START: acpi::init returned");
                     }
 
                     // Try QEMU virt machine's known PL031 RTC address as fallback

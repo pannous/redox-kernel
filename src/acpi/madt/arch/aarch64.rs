@@ -34,13 +34,15 @@ pub(super) fn init(madt: Madt) {
     // Update CPU count based on GICC entries
     let cpu_count = giccs.len() as u32;
     if cpu_count > 0 {
-        debug!("SMP: ACPI MADT lists {} CPU(s)", cpu_count);
+        info!("SMP: ACPI MADT lists {} CPU(s)", cpu_count);
         crate::CPU_COUNT.store(cpu_count, core::sync::atomic::Ordering::SeqCst);
     }
     let Some(gicd) = gicd_opt else {
         warn!("No GICD found");
         return;
     };
+
+    // Initialize the distributor interface (shared by all CPUs)
     let mut gic_dist_if = GicDistIf::default();
     unsafe {
         let phys = PhysicalAddress::new(gicd.physical_base_address as usize);
@@ -48,18 +50,26 @@ pub(super) fn init(madt: Madt) {
         gic_dist_if.init(virt.data());
     };
     info!("{:#x?}", gic_dist_if);
+    info!("SMP: GIC distributor initialized, version {}", gicd.gic_version);
+
     match gicd.gic_version {
         1 | 2 => {
+            // GICv2: Initialize all CPU interfaces
+            let mut cpu_idx = 0;
             for gicc in giccs {
+                debug!("SMP: Initializing GICv2 CPU interface {}", cpu_idx);
+
                 let mut gic_cpu_if = GicCpuIf::default();
                 unsafe {
                     let phys = PhysicalAddress::new(gicc.physical_base_address as usize);
                     let virt = map_device_memory(phys, PAGE_SIZE);
                     gic_cpu_if.init(virt.data())
                 };
-                info!("{:#x?}", gic_cpu_if);
+                info!("SMP: GIC CPU {} interface: {:#x?}", cpu_idx, gic_cpu_if);
+
+                // Create controller for this CPU (with cloned distributor)
                 let gic = GenericInterruptController {
-                    gic_dist_if,
+                    gic_dist_if,  // Copy of distributor interface
                     gic_cpu_if,
                     irq_range: (0, 0),
                 };
@@ -70,19 +80,26 @@ pub(super) fn init(madt: Madt) {
                     ic: Box::new(gic),
                 };
                 unsafe { IRQ_CHIP.irq_chip_list.chips.push(chip) };
-                //TODO: support more GICCs
-                break;
+
+                cpu_idx += 1;
             }
+            info!("SMP: Initialized {} GICv2 CPU interfaces", cpu_idx);
         }
         3 => {
+            // GICv3: Initialize all CPU interfaces
+            let mut cpu_idx = 0;
             for _gicc in giccs {
+                debug!("SMP: Initializing GICv3 CPU interface {}", cpu_idx);
+
                 let mut gic_cpu_if = GicV3CpuIf;
                 unsafe { gic_cpu_if.init() };
-                info!("{:#x?}", gic_cpu_if);
+                info!("SMP: GIC CPU {} interface: {:#x?}", cpu_idx, gic_cpu_if);
+
+                // Create controller for this CPU (with cloned distributor)
                 let gic = GicV3 {
-                    gic_dist_if,
+                    gic_dist_if,  // Copy of distributor interface
                     gic_cpu_if,
-                    //TODO: get GICRs
+                    //TODO: get GICRs from MADT
                     gicrs: Vec::new(),
                     irq_range: (0, 0),
                 };
@@ -93,9 +110,10 @@ pub(super) fn init(madt: Madt) {
                     ic: Box::new(gic),
                 };
                 unsafe { IRQ_CHIP.irq_chip_list.chips.push(chip) };
-                //TODO: support more GICCs
-                break;
+
+                cpu_idx += 1;
             }
+            info!("SMP: Initialized {} GICv3 CPU interfaces", cpu_idx);
         }
         _ => {
             warn!("unsupported GIC version {}", gicd.gic_version);
