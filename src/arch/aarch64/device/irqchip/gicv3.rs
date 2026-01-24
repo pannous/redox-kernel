@@ -145,6 +145,10 @@ impl InterruptController for GicV3 {
             Some(self.irq_range.0 + hwirq as usize)
         }
     }
+
+    fn send_sgi(&mut self, kind: crate::ipi::IpiKind, target: crate::ipi::IpiTarget) {
+        self.gic_cpu_if.send_sgi(kind, target);
+    }
 }
 
 #[derive(Debug)]
@@ -191,6 +195,35 @@ impl GicV3CpuIf {
     unsafe fn irq_eoi(&mut self, irq: u32) {
         unsafe {
             asm!("msr icc_eoir1_el1, {}", in(reg) irq as usize);
+        }
+    }
+
+    fn send_sgi(&mut self, kind: crate::ipi::IpiKind, target: crate::ipi::IpiTarget) {
+        use crate::ipi::IpiTarget;
+
+        let sgi_id = kind as u64;
+
+        let sgi_value = match target {
+            IpiTarget::Current => {
+                (1u64 << 40) | (sgi_id << 24)
+            }
+            IpiTarget::Other => {
+                let mpidr: u64;
+                unsafe {
+                    asm!("mrs {}, mpidr_el1", out(reg) mpidr);
+                }
+                let aff0 = mpidr & 0xff;
+                let target_list = (1u64 << aff0) ^ 1;
+
+                (target_list << 0) | (sgi_id << 24)
+            }
+            IpiTarget::All => {
+                (0xffu64 << 0) | (sgi_id << 24)
+            }
+        };
+
+        unsafe {
+            asm!("msr icc_sgi1r_el1, {}", in(reg) sgi_value);
         }
     }
 }

@@ -82,10 +82,14 @@ struct SwitchResultInner {
 ///
 /// The function also calls the signal handler after switching contexts.
 pub fn tick(token: &mut CleanLockToken) {
-    let ticks_cell = &PercpuBlock::current().switch_internals.pit_ticks;
+    let percpu = PercpuBlock::current();
+    let ticks_cell = &percpu.switch_internals.pit_ticks;
 
     let new_ticks = ticks_cell.get() + 1;
     ticks_cell.set(new_ticks);
+
+    // Periodically log SMP activity summary
+    crate::smp_diag::periodic_log();
 
     // Trigger a context switch every 3 ticks (~30ms at 100Hz).
     // IPC latency is handled by switch_pending flag set in unblock(), not by reducing this threshold.
@@ -140,6 +144,7 @@ pub enum SwitchResult {
 pub fn switch(token: &mut CleanLockToken) -> SwitchResult {
     let percpu = PercpuBlock::current();
     cpu_stats::add_context_switch();
+    percpu.stats.add_context_switch_local();
 
     //set PIT Interrupt counter to 0, giving each process same amount of PIT ticks
     percpu.switch_internals.pit_ticks.set(0);
@@ -243,6 +248,15 @@ pub fn switch(token: &mut CleanLockToken) -> SwitchResult {
             // Update context states and prepare for the switch.
             let prev_context = &mut *prev_context_guard;
             let next_context = &mut *next_context_guard;
+
+            // Log context switch with CPU and context IDs
+            debug!(
+                "SCHED: CPU {} switch: ctx {} -> ctx {} (name: {})",
+                cpu_id.get(),
+                prev_context.debug_id,
+                next_context.debug_id,
+                next_context.name.as_str()
+            );
 
             // Set the previous context as "not running"
             prev_context.running = false;

@@ -20,6 +20,7 @@ static GICD_ICENABLER: u32 = 0x180;
 static GICD_IPRIORITY: u32 = 0x400;
 static GICD_ITARGETSR: u32 = 0x800;
 static GICD_ICFGR: u32 = 0xc00;
+static GICD_SGIR: u32 = 0xf00;
 
 static GICC_EOIR: u32 = 0x0010;
 static GICC_IAR: u32 = 0x000c;
@@ -147,6 +148,24 @@ impl InterruptController for GenericInterruptController {
             None
         } else {
             Some(self.irq_range.0 + hwirq as usize)
+        }
+    }
+
+    fn send_sgi(&mut self, kind: crate::ipi::IpiKind, target: crate::ipi::IpiTarget) {
+        use crate::ipi::IpiTarget;
+
+        let sgi_id = kind as u32;
+
+        let target_filter = match target {
+            IpiTarget::Current => 0b10u32 << 24,
+            IpiTarget::Other => 0b01u32 << 24,
+            IpiTarget::All => 0b00u32 << 24,
+        };
+
+        let sgir_value = target_filter | sgi_id;
+
+        unsafe {
+            self.gic_dist_if.write(GICD_SGIR, sgir_value);
         }
     }
 }

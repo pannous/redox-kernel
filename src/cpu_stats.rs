@@ -39,6 +39,12 @@ pub struct CpuStats {
     irq: AtomicU64,
     /// Current state of the CPU
     state: AtomicU8,
+    /// Number of context switches on this CPU
+    context_switches: AtomicU64,
+    /// Number of IPIs sent by this CPU
+    ipis_sent: AtomicU64,
+    /// Number of IPIs received by this CPU
+    ipis_received: AtomicU64,
 }
 
 impl CpuStats {
@@ -50,6 +56,9 @@ impl CpuStats {
             idle: AtomicU64::new(0),
             irq: AtomicU64::new(0),
             state: AtomicU8::new(0),
+            context_switches: AtomicU64::new(0),
+            ipis_sent: AtomicU64::new(0),
+            ipis_received: AtomicU64::new(0),
         }
     }
 }
@@ -65,6 +74,12 @@ pub struct CpuStatsData {
     pub idle: u64,
     /// Number of times the CPU handled an interrupt
     pub irq: u64,
+    /// Number of context switches on this CPU
+    pub context_switches: u64,
+    /// Number of IPIs sent by this CPU
+    pub ipis_sent: u64,
+    /// Number of IPIs received by this CPU
+    pub ipis_received: u64,
 }
 
 impl CpuStats {
@@ -111,13 +126,16 @@ impl CpuStats {
 impl CpuStatsData {
     pub fn to_string(&self, cpu_id: LogicalCpuId) -> String {
         format!(
-            "cpu{} {} {} {} {} {}",
+            "cpu{} {} {} {} {} {} ctx_sw:{} ipi_s:{} ipi_r:{}",
             cpu_id.get(),
             self.user,
             self.nice,
             self.kernel,
             self.idle,
             self.irq,
+            self.context_switches,
+            self.ipis_sent,
+            self.ipis_received,
         )
     }
 }
@@ -130,6 +148,9 @@ impl From<&CpuStats> for CpuStatsData {
             kernel: val.kernel.load(Ordering::Relaxed),
             idle: val.idle.load(Ordering::Relaxed),
             irq: val.irq.load(Ordering::Relaxed),
+            context_switches: val.context_switches.load(Ordering::Relaxed),
+            ipis_sent: val.ipis_sent.load(Ordering::Relaxed),
+            ipis_received: val.ipis_received.load(Ordering::Relaxed),
         }
     }
 }
@@ -162,4 +183,24 @@ pub fn irq_counts() -> Vec<usize> {
         .iter()
         .map(|count| count.load(Ordering::Relaxed))
         .collect()
+}
+
+impl CpuStats {
+    /// Add a context switch event to this CPU's statistics
+    #[inline]
+    pub fn add_context_switch_local(&self) {
+        self.context_switches.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// Add an IPI sent event to this CPU's statistics
+    #[inline]
+    pub fn add_ipi_sent(&self) {
+        self.ipis_sent.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// Add an IPI received event to this CPU's statistics
+    #[inline]
+    pub fn add_ipi_received(&self) {
+        self.ipis_received.fetch_add(1, Ordering::Relaxed);
+    }
 }

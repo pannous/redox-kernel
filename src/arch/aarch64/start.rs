@@ -266,16 +266,20 @@ unsafe extern "C" fn start(args_ptr: *const KernelArgs) -> ! {
 }
 
 #[repr(C, packed)]
-#[allow(unused)]
 pub struct KernelArgsAp {
-    cpu_id: u64,
-    page_table: u64,
-    stack_start: u64,
-    stack_end: u64,
+    pub cpu_id: u64,
+    pub page_table: u64,
+    pub stack_start: u64,
+    pub stack_end: u64,
 }
 
-/// Entry to rust for an AP
-#[allow(unused)]
+/// Assembly entry point for Application Processors
+///
+/// Called by PSCI CPU_ON with:
+/// - x0 = context parameter (args_ptr)
+/// - MMU disabled
+/// - EL1
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn kstart_ap(args_ptr: *const KernelArgsAp) -> ! {
     unsafe {
         let cpu_id = {

@@ -34,6 +34,11 @@ pub trait InterruptController: InterruptHandler {
     fn irq_disable(&mut self, irq_num: u32);
     fn irq_xlate(&self, irq_data: IrqCell) -> Result<usize>;
     fn irq_to_virq(&self, hwirq: u32) -> Option<usize>;
+
+    #[cfg(target_arch = "aarch64")]
+    fn send_sgi(&mut self, _kind: crate::ipi::IpiKind, _target: crate::ipi::IpiTarget) {
+        // Default no-op for interrupt controllers that don't support SGI
+    }
 }
 
 pub struct IrqConnection {

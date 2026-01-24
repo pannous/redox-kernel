@@ -82,6 +82,12 @@ pub fn shootdown_tlb_ipi(target: Option<LogicalCpuId>) {
         let my_percpublock = PercpuBlock::current();
         assert_ne!(target, my_percpublock.cpu_id);
 
+        debug!(
+            "SMP: CPU {} initiating TLB shootdown to CPU {}",
+            my_percpublock.cpu_id.get(),
+            target.get()
+        );
+
         let Some(percpublock) = (unsafe {
             ALL_PERCPU_BLOCKS[target.get() as usize]
                 .load(Ordering::Acquire)
@@ -105,6 +111,10 @@ pub fn shootdown_tlb_ipi(target: Option<LogicalCpuId>) {
 
         crate::ipi::ipi_single(crate::ipi::IpiKind::Tlb, percpublock);
     } else {
+        debug!(
+            "SMP: CPU {} broadcasting TLB shootdown to all CPUs",
+            PercpuBlock::current().cpu_id.get()
+        );
         for id in 0..crate::cpu_count() {
             // TODO: Optimize: use global counter and percpu ack counters, send IPI using
             // destination shorthand "all CPUs".
@@ -118,6 +128,8 @@ impl PercpuBlock {
         if self.wants_tlb_shootdown.swap(false, Ordering::Relaxed) == false {
             return;
         }
+
+        debug!("SMP: CPU {} handling TLB shootdown", self.cpu_id.get());
 
         // TODO: Finer-grained flush
         unsafe {

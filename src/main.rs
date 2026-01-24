@@ -89,6 +89,9 @@ mod cpu_set;
 /// Stats for the CPUs
 mod cpu_stats;
 
+/// SMP diagnostics and logging
+mod smp_diag;
+
 /// Context management
 mod context;
 
@@ -212,30 +215,21 @@ fn kmain(bootstrap: Bootstrap) -> ! {
 }
 
 /// This is the main kernel entry point for secondary CPUs
-#[allow(unreachable_code, unused_variables, dead_code)]
 fn kmain_ap(cpu_id: crate::cpu_set::LogicalCpuId) -> ! {
     let mut token = unsafe { CleanLockToken::new() };
 
     #[cfg(feature = "profiling")]
     profiling::maybe_run_profiling_helper_forever(cpu_id);
 
-    if !cfg!(feature = "multi_core") {
-        debug!("AP {}: Disabled", cpu_id);
-
-        loop {
-            unsafe {
-                interrupt::disable();
-                interrupt::halt();
-            }
-        }
-    }
-
+    // Initialize context management for this CPU
     context::init(&mut token);
 
-    debug!("AP {}", cpu_id);
+    debug!("AP {} initialized, entering scheduler", cpu_id);
 
+    // Ready for profiling on this CPU
     profiling::ready_for_profiling();
 
+    // Enter the scheduler loop - contexts will be scheduled on this CPU
     run_userspace(&mut token);
 }
 fn run_userspace(token: &mut CleanLockToken) -> ! {

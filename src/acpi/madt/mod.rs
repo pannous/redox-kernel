@@ -31,15 +31,18 @@ pub const FLAG_PCAT: u32 = 1;
 
 impl Madt {
     pub fn init() {
+        warn!("MADT::init CALLED - Looking for APIC table");
         let madt = Madt::new(find_one_sdt!("APIC"));
 
         if let Some(madt) = madt {
             // safe because no APs have been started yet.
             unsafe { MADT.get().write(Some(madt)) };
 
-            debug!("  APIC: {:>08X}: {}", madt.local_address, madt.flags);
+            warn!("  APIC: {:>08X}: {}", madt.local_address, madt.flags);
 
             arch::init(madt);
+        } else {
+            warn!("MADT::init - No MADT/APIC table found");
         }
     }
 
