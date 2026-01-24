@@ -68,7 +68,7 @@ impl GenericTimer {
         );
         let clk_freq = unsafe { control_regs::cntfrq_el0() };
         self.clk_freq = clk_freq;
-        self.reload_count = clk_freq / 50;  // 50Hz = 20ms ticks (testing reduced frequency for CPU usage)
+        self.reload_count = clk_freq / 100;  // 100Hz = 10ms ticks (stable, well-tested)
         self.reload_count();
     }
 
