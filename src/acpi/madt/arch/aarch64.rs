@@ -125,12 +125,11 @@ pub(super) fn init(madt: Madt) {
     unsafe { IRQ_CHIP.init(None) };
 
     // Phase 4: Start secondary CPUs using PSCI
-    // TODO: Uncomment when kstart_ap is implemented
-    // if cfg!(feature = "multi_core") {
-    //     unsafe {
-    //         start_secondary_cpus(&giccs);
-    //     }
-    // }
+    if cfg!(feature = "multi_core") {
+        unsafe {
+            start_secondary_cpus(&giccs);
+        }
+    }
 }
 
 /// PSCI function IDs (ARM PSCI Specification v1.0+)
