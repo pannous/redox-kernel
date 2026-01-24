@@ -25,14 +25,6 @@ pub unsafe fn disable() {
 /// Performing enable followed by halt is not guaranteed to be atomic, use this instead!
 #[inline(always)]
 pub unsafe fn enable_and_halt() {
-    use core::sync::atomic::{AtomicU64, Ordering};
-    static WFI_COUNT: AtomicU64 = AtomicU64::new(0);
-
-    let count = WFI_COUNT.fetch_add(1, Ordering::Relaxed);
-    if count % 1_000_000 == 0 {
-        info!("WFI called {} times on CPU {}", count, crate::cpu_id().get());
-    }
-
     unsafe {
         // Enable interrupts FIRST, then halt - same order as x86 sti;hlt
         // DSB ensures memory ops complete, then we enable interrupts, then WFI
