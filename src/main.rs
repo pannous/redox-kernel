@@ -247,8 +247,9 @@ fn run_userspace(token: &mut CleanLockToken) -> ! {
                 }
                 SwitchResult::AllContextsIdle => {
                     let c = IDLE_SPINS.fetch_add(1, Ordering::Relaxed);
-                    if c % 1_000_000 == 0 {
-                        println!("run_userspace: idle spin {} (all contexts idle)", c);
+                    if c % 100_000 == 0 {
+                        info!("run_userspace: CPU {} idle spin {} (all contexts idle)",
+                              crate::cpu_id().get(), c);
                     }
                     // Enable interrupts, then halt CPU (to save power) until the next interrupt is actually fired.
                     interrupt::enable_and_halt();
