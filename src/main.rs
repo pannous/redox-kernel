@@ -221,9 +221,6 @@ fn kmain_ap(cpu_id: crate::cpu_set::LogicalCpuId) -> ! {
     #[cfg(feature = "profiling")]
     profiling::maybe_run_profiling_helper_forever(cpu_id);
 
-    // Initialize context management for this CPU
-    context::init(&mut token);
-
     debug!("AP {} initialized, entering scheduler", cpu_id);
 
     // Ready for profiling on this CPU
