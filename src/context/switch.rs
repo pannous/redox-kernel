@@ -249,14 +249,14 @@ pub fn switch(token: &mut CleanLockToken) -> SwitchResult {
             let prev_context = &mut *prev_context_guard;
             let next_context = &mut *next_context_guard;
 
-            // Log context switch with CPU and context IDs
-            debug!(
-                "SCHED: CPU {} switch: ctx {} -> ctx {} (name: {})",
-                cpu_id.get(),
-                prev_context.debug_id,
-                next_context.debug_id,
-                next_context.name.as_str()
-            );
+            // Verbose context switch logging disabled - floods output
+            // debug!(
+            //     "SCHED: CPU {} switch: ctx {} -> ctx {} (name: {})",
+            //     cpu_id.get(),
+            //     prev_context.debug_id,
+            //     next_context.debug_id,
+            //     next_context.name.as_str()
+            // );
 
             // Set the previous context as "not running"
             prev_context.running = false;
