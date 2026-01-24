@@ -88,8 +88,8 @@ pub fn tick(token: &mut CleanLockToken) {
     let new_ticks = ticks_cell.get() + 1;
     ticks_cell.set(new_ticks);
 
-    // Periodically log SMP activity summary
-    crate::smp_diag::periodic_log();
+    // FIXME: Disabled periodic_log() - causes boot hang due to Vec allocation in interrupt context
+    // crate::smp_diag::periodic_log();
 
     // Trigger a context switch every 3 ticks (~30ms at 100Hz).
     // IPC latency is handled by switch_pending flag set in unblock(), not by reducing this threshold.
