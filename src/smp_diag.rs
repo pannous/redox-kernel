@@ -6,9 +6,11 @@
 use core::sync::atomic::{AtomicU64, Ordering};
 
 /// Global tick counter for periodic SMP reporting
+#[allow(dead_code)]
 static GLOBAL_TICK_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 /// Log SMP activity summary periodically (called from timer interrupt)
+#[allow(dead_code)]
 pub fn periodic_log() {
     let tick = GLOBAL_TICK_COUNTER.fetch_add(1, Ordering::Relaxed);
 
@@ -48,6 +50,7 @@ pub fn periodic_log() {
 }
 
 /// Log when an IPI is sent
+#[allow(dead_code)]
 #[inline]
 pub fn log_ipi_send(from_cpu: crate::cpu_set::LogicalCpuId, kind: &str, target: &str) {
     trace!("IPI: CPU {} send {} to {}", from_cpu.get(), kind, target);
@@ -55,6 +58,7 @@ pub fn log_ipi_send(from_cpu: crate::cpu_set::LogicalCpuId, kind: &str, target: 
 }
 
 /// Log when an IPI is received
+#[allow(dead_code)]
 #[inline]
 pub fn log_ipi_receive(cpu_id: crate::cpu_set::LogicalCpuId, kind: &str) {
     trace!("IPI: CPU {} received {}", cpu_id.get(), kind);

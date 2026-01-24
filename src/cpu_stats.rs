@@ -193,12 +193,14 @@ impl CpuStats {
     }
 
     /// Add an IPI sent event to this CPU's statistics
+    #[allow(dead_code)]
     #[inline]
     pub fn add_ipi_sent(&self) {
         self.ipis_sent.fetch_add(1, Ordering::Relaxed);
     }
 
     /// Add an IPI received event to this CPU's statistics
+    #[allow(dead_code)]
     #[inline]
     pub fn add_ipi_received(&self) {
         self.ipis_received.fetch_add(1, Ordering::Relaxed);
