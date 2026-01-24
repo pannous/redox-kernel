@@ -33,6 +33,9 @@ pub fn ipi(kind: IpiKind, target: IpiTarget) {
         target
     );
 
+    // Increment IPI send counter
+    crate::percpu::PercpuBlock::current().stats.add_ipi_sent();
+
     unsafe {
         let ic_idx = ROOT_IC_IDX.load(Ordering::Relaxed);
         let ic = &mut IRQ_CHIP.irq_chip_list.chips[ic_idx].ic;
@@ -91,6 +94,9 @@ pub fn handle_ipi(sgi_num: u32) {
         kind,
         sgi_num
     );
+
+    // Increment IPI receive counter
+    PercpuBlock::current().stats.add_ipi_received();
 
     // Process the IPI based on its kind
     match kind {

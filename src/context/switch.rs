@@ -162,8 +162,9 @@ pub fn switch(token: &mut CleanLockToken) -> SwitchResult {
         {
             local_spins += 1;
             let total = SPIN_COUNTER.fetch_add(1, Ordering::Relaxed);
-            if total % 10_000_000 == 0 {
-                println!("CS_LOCK spin: total={} local={}", total, local_spins);
+            // Lower threshold from 10M to 100K to detect contention earlier
+            if total % 100_000 == 0 {
+                warn!("CS_LOCK spin: total={} local={} (CPU {})", total, local_spins, crate::cpu_id().get());
             }
             hint::spin_loop();
             percpu.maybe_handle_tlb_shootdown();
