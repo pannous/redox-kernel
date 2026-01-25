@@ -233,6 +233,7 @@ fn run_userspace(token: &mut CleanLockToken) -> ! {
     use core::sync::atomic::{AtomicU64, Ordering};
     static IDLE_SPINS: AtomicU64 = AtomicU64::new(0);
     static SWITCH_SPINS: AtomicU64 = AtomicU64::new(0);
+    static WFI_SPURIOUS: AtomicU64 = AtomicU64::new(0);
 
     loop {
         unsafe {
@@ -251,8 +252,29 @@ fn run_userspace(token: &mut CleanLockToken) -> ! {
                         info!("run_userspace: CPU {} idle spin {} (all contexts idle)",
                               crate::cpu_id().get(), c);
                     }
-                    // Enable interrupts, then halt CPU (to save power) until the next interrupt is actually fired.
-                    interrupt::enable_and_halt();
+                    // QEMU/HVF workaround: WFI returns spuriously without interrupts on macOS.
+                    // Solution: Loop on WFI until the PIT tick count changes, indicating a real
+                    // timer interrupt occurred. This avoids 12,000+ context switches/sec on idle.
+                    let percpu = crate::percpu::PercpuBlock::current();
+                    let start_ticks = percpu.switch_internals.pit_ticks.get();
+
+                    loop {
+                        interrupt::enable_and_halt();
+
+                        // Check if a timer tick occurred (or switch_pending for syscall wakeup)
+                        let current_ticks = percpu.switch_internals.pit_ticks.get();
+                        if current_ticks != start_ticks || percpu.switch_pending.take() {
+                            // Real interrupt - exit and do context switch
+                            break;
+                        }
+
+                        // Spurious wakeup - retry WFI without context switch overhead
+                        let spurious = WFI_SPURIOUS.fetch_add(1, Ordering::Relaxed);
+                        if spurious % 10_000 == 0 {
+                            debug!("WFI spurious {} (QEMU/HVF)", spurious);
+                        }
+                        interrupt::disable();
+                    }
                 }
             }
         }

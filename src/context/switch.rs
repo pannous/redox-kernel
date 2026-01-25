@@ -373,7 +373,7 @@ pub fn switch(token: &mut CleanLockToken) -> SwitchResult {
 pub struct ContextSwitchPercpu {
     switch_result: Cell<Option<SwitchResultInner>>,
     switch_time: Cell<u128>,
-    pit_ticks: Cell<usize>,
+    pub(crate) pit_ticks: Cell<usize>,
 
     current_ctxt: RefCell<Option<Arc<ContextLock>>>,
 
