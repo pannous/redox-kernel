@@ -227,6 +227,17 @@ pub fn switch(token: &mut CleanLockToken) -> SwitchResult {
                 if let UpdateResult::CanSwitch =
                     unsafe { update_runnable(&mut next_context_guard, cpu_id) }
                 {
+                    // Log runnable contexts periodically
+                    use core::sync::atomic::AtomicU64;
+                    static RUNNABLE_LOG: AtomicU64 = AtomicU64::new(0);
+                    let count = RUNNABLE_LOG.fetch_add(1, Ordering::Relaxed);
+                    if count % 100_000 == 0 {
+                        warn!("Found runnable: {} (id={}, status={:?})",
+                              next_context_guard.name.as_str(),
+                              next_context_guard.debug_id,
+                              next_context_guard.status);
+                    }
+
                     // Store locks for previous and next context and break out from loop
                     // for the switch
                     switch_context_opt = Some((prev_context_guard, next_context_guard));
@@ -342,6 +353,13 @@ pub fn switch(token: &mut CleanLockToken) -> SwitchResult {
             arch::CONTEXT_SWITCH_LOCK.store(false, Ordering::SeqCst);
 
             percpu.stats.set_state(cpu_stats::CpuState::Idle);
+
+            use core::sync::atomic::AtomicU64;
+            static IDLE_COUNT: AtomicU64 = AtomicU64::new(0);
+            let count = IDLE_COUNT.fetch_add(1, Ordering::Relaxed);
+            if count % 10_000 == 0 {
+                warn!("CPU {} AllContextsIdle count: {}", cpu_id.get(), count);
+            }
 
             SwitchResult::AllContextsIdle
         }
