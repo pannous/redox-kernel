@@ -121,6 +121,12 @@ exception_stack!(irq_at_el0, |_stack| {
         } else {
             println!("unexpected irq num {}", irq);
         }
+
+        // Check for pending context switch (timer tick set switch_pending)
+        // This enables time-slicing: processes get preempted after their time slice expires
+        if crate::percpu::PercpuBlock::current().switch_pending.take() {
+            crate::context::switch(&mut token);
+        }
     }
 });
 
