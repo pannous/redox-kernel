@@ -36,32 +36,8 @@ exception_stack!(irq_at_el0, |_stack| {
 
 exception_stack!(irq_at_el1, |_stack| {
     unsafe {
-        use core::sync::atomic::{AtomicU64, Ordering};
-        static IRQ_COUNTER: [AtomicU64; 256] = [const { AtomicU64::new(0) }; 256];
-        static IRQ_LOG_INTERVAL: AtomicU64 = AtomicU64::new(0);
-
         let mut token = CleanLockToken::new();
         let (irq, virq) = irq_ack();
-
-        // Track interrupt counts per IRQ ID
-        if (irq as usize) < 256 {
-            IRQ_COUNTER[irq as usize].fetch_add(1, Ordering::Relaxed);
-        }
-
-        // Log interrupt distribution every 100,000 interrupts
-        let total = IRQ_LOG_INTERVAL.fetch_add(1, Ordering::Relaxed);
-        if total % 100_000 == 0 {
-            // Find top 5 interrupts
-            let mut top_irqs: [(u32, u64); 5] = [(0, 0); 5];
-            for i in 0..256 {
-                let count = IRQ_COUNTER[i].load(Ordering::Relaxed);
-                if count > top_irqs[4].1 {
-                    top_irqs[4] = (i as u32, count);
-                    top_irqs.sort_by(|a, b| b.1.cmp(&a.1));
-                }
-            }
-            warn!("IRQ distribution (top 5): {:?}", top_irqs);
-        }
 
         // Check if this is an SGI (Software Generated Interrupt) used for IPIs
         // SGIs use interrupt IDs 0-15 in the GIC
