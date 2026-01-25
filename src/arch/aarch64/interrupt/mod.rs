@@ -26,7 +26,9 @@ pub unsafe fn disable() {
 #[inline(always)]
 pub unsafe fn enable_and_halt() {
     unsafe {
+        // Enable interrupts FIRST, then halt - same order as x86 sti;hlt
         // DSB ensures memory ops complete, then we enable interrupts, then WFI
+        // WFI with interrupts enabled will properly wait for next interrupt
         asm!("dsb sy", "msr daifclr, #2", "wfi", "nop");
     }
 }

@@ -230,47 +230,29 @@ fn kmain_ap(cpu_id: crate::cpu_set::LogicalCpuId) -> ! {
     run_userspace(&mut token);
 }
 fn run_userspace(token: &mut CleanLockToken) -> ! {
+    use core::sync::atomic::{AtomicU64, Ordering};
+    static IDLE_SPINS: AtomicU64 = AtomicU64::new(0);
+    static SWITCH_SPINS: AtomicU64 = AtomicU64::new(0);
+
     loop {
         unsafe {
             interrupt::disable();
             match context::switch(token) {
                 SwitchResult::Switched => {
+                    let c = SWITCH_SPINS.fetch_add(1, Ordering::Relaxed);
+                    if c % 1_000_000 == 0 {
+                        println!("run_userspace: switched {} times", c);
+                    }
                     interrupt::enable_and_nop();
                 }
                 SwitchResult::AllContextsIdle => {
-                    // QEMU/HVF workaround: WFI returns spuriously without interrupts on macOS.
-                    // Solution: Loop on WFI until switch_pending is set by tick() or unblock().
-                    // This avoids calling switch() on spurious WFI wakeups.
-                    //
-                    // Note: tick() sets switch_pending instead of calling switch() directly
-                    // to avoid double-switching (once in IRQ handler, once after WFI).
-                    let percpu = crate::percpu::PercpuBlock::current();
-
-                    let mut wfi_attempts = 0u32;
-                    loop {
-                        interrupt::enable_and_halt();
-                        wfi_attempts += 1;
-
-                        // Check if switch is needed (set by tick() or unblock())
-                        if percpu.switch_pending.take() {
-                            break;
-                        }
-
-                        // QEMU/HVF workaround: Spurious WFI wakeups on macOS
-                        // WFI returns ~4,000-12,000 times/sec without real interrupts
-                        // Add 1ms delay to reduce CPU spinning (mimics QEMU-side fix)
-                        // This reduces idle CPU from ~156% to ~75% on QEMU/HVF
-                        #[cfg(target_arch = "aarch64")]
-                        crate::arch::time::delay_microseconds(1000);  // 1ms delay
-
-                        // Safety valve: if we've spun too long, break anyway
-                        if wfi_attempts > 50000 {
-                            warn!("WFI: safety break after {} spurious wakeups!", wfi_attempts);
-                            break;
-                        }
-
-                        interrupt::disable();
+                    let c = IDLE_SPINS.fetch_add(1, Ordering::Relaxed);
+                    if c % 100_000 == 0 {
+                        info!("run_userspace: CPU {} idle spin {} (all contexts idle)",
+                              crate::cpu_id().get(), c);
                     }
+                    // Enable interrupts, then halt CPU (to save power) until the next interrupt is actually fired.
+                    interrupt::enable_and_halt();
                 }
             }
         }
