@@ -230,28 +230,14 @@ fn kmain_ap(cpu_id: crate::cpu_set::LogicalCpuId) -> ! {
     run_userspace(&mut token);
 }
 fn run_userspace(token: &mut CleanLockToken) -> ! {
-    use core::sync::atomic::{AtomicU64, Ordering};
-    static IDLE_SPINS: AtomicU64 = AtomicU64::new(0);
-    static SWITCH_SPINS: AtomicU64 = AtomicU64::new(0);
-    static WFI_SPURIOUS: AtomicU64 = AtomicU64::new(0);
-
     loop {
         unsafe {
             interrupt::disable();
             match context::switch(token) {
                 SwitchResult::Switched => {
-                    let c = SWITCH_SPINS.fetch_add(1, Ordering::Relaxed);
-                    if c % 1_000_000 == 0 {
-                        println!("run_userspace: switched {} times", c);
-                    }
                     interrupt::enable_and_nop();
                 }
                 SwitchResult::AllContextsIdle => {
-                    let c = IDLE_SPINS.fetch_add(1, Ordering::Relaxed);
-                    if c % 100_000 == 0 {
-                        info!("run_userspace: CPU {} idle spin {} (all contexts idle)",
-                              crate::cpu_id().get(), c);
-                    }
                     // QEMU/HVF workaround: WFI returns spuriously without interrupts on macOS.
                     // Solution: Loop on WFI until switch_pending is set by tick() or unblock().
                     // This avoids calling switch() on spurious WFI wakeups.
@@ -267,22 +253,7 @@ fn run_userspace(token: &mut CleanLockToken) -> ! {
 
                         // Check if switch is needed (set by tick() or unblock())
                         if percpu.switch_pending.take() {
-                            // Real interrupt requested context switch
-                            if wfi_attempts > 1 {
-                                static WFI_MULTI: AtomicU64 = AtomicU64::new(0);
-                                let multi = WFI_MULTI.fetch_add(1, Ordering::Relaxed);
-                                if multi % 1000 == 0 {
-                                    debug!("WFI: {} spurious wakeups before real interrupt (multi_count={})",
-                                           wfi_attempts - 1, multi);
-                                }
-                            }
                             break;
-                        }
-
-                        // Spurious wakeup - retry WFI without context switch overhead
-                        let spurious = WFI_SPURIOUS.fetch_add(1, Ordering::Relaxed);
-                        if spurious % 10_000 == 0 {
-                            warn!("WFI spurious {} (attempts={})", spurious, wfi_attempts);
                         }
 
                         // QEMU/HVF workaround: Add yield instruction to reduce host CPU spinning

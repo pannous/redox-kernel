@@ -370,13 +370,6 @@ pub fn switch(token: &mut CleanLockToken) -> SwitchResult {
 
             percpu.stats.set_state(cpu_stats::CpuState::Idle);
 
-            use core::sync::atomic::AtomicU64;
-            static IDLE_COUNT: AtomicU64 = AtomicU64::new(0);
-            let count = IDLE_COUNT.fetch_add(1, Ordering::Relaxed);
-            if count % 10_000 == 0 {
-                warn!("CPU {} AllContextsIdle count: {}", cpu_id.get(), count);
-            }
-
             SwitchResult::AllContextsIdle
         }
     }
