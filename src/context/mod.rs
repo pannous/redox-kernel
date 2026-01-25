@@ -98,7 +98,10 @@ pub fn init(token: &mut CleanLockToken) {
 
     let context_lock = Arc::new(ContextLock::new(context));
 
-    contexts_mut(token.token()).insert(ContextRef(Arc::clone(&context_lock)));
+    // Don't insert idle context into regular contexts list - it should only be
+    // accessible via idle_context reference. This allows the scheduler to properly
+    // detect when all regular contexts are blocked and enter idle state.
+    // contexts_mut(token.token()).insert(ContextRef(Arc::clone(&context_lock)));
 
     unsafe {
         let percpu = PercpuBlock::current();
