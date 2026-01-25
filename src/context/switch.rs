@@ -82,6 +82,13 @@ struct SwitchResultInner {
 ///
 /// The function also calls the signal handler after switching contexts.
 pub fn tick(token: &mut CleanLockToken) {
+    use core::sync::atomic::{AtomicU64, Ordering};
+    static TICK_COUNT: AtomicU64 = AtomicU64::new(0);
+    let tick_num = TICK_COUNT.fetch_add(1, Ordering::Relaxed);
+    if tick_num % 1000 == 0 {
+        warn!("tick() called {} times (should be ~10/sec at 10Hz)", tick_num);
+    }
+
     let percpu = PercpuBlock::current();
     let ticks_cell = &percpu.switch_internals.pit_ticks;
 
@@ -93,10 +100,19 @@ pub fn tick(token: &mut CleanLockToken) {
 
     // Trigger a context switch every 3 ticks (~30ms at 100Hz).
     // IPC latency is handled by switch_pending flag set in unblock(), not by reducing this threshold.
+    //
+    // IMPORTANT: Don't call switch() directly here! The idle loop's WFI will detect the
+    // pit_ticks change and call switch() itself. Calling switch() here would result in
+    // double switching (once here, once after WFI returns), causing high CPU usage.
+    //
+    // Instead, just set switch_pending to signal that a switch is needed.
     if new_ticks >= 3 {
-        switch(token);
-        crate::context::signal::signal_handler(token);
+        percpu.switch_pending.set(true);
+        // Note: signal_handler will be called after switch() in the idle loop or syscall return
     }
+
+    // Always handle signals on timer ticks for proper signal delivery
+    crate::context::signal::signal_handler(token);
 }
 
 /// Finishes the context switch by clearing any temporary data and resetting the lock.
