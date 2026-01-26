@@ -103,7 +103,6 @@ pub unsafe fn init(already_supplied_rsdp: Option<*const u8>) {
         let rsdp_opt = Rsdp::get_rsdp(&mut KernelMapper::lock(), already_supplied_rsdp);
 
         if let Some(rsdp) = rsdp_opt {
-            debug!("SDT address: {:#x}", rsdp.sdt_address());
             let rxsdt = get_sdt(rsdp.sdt_address(), &mut KernelMapper::lock());
 
             let rxsdt = if let Some(rsdt) = Rsdt::new(rxsdt) {
@@ -116,7 +115,7 @@ pub unsafe fn init(already_supplied_rsdp: Option<*const u8>) {
                 });
 
                 if !initialized {
-                    error!("RXSDT_ENUM already initialized");
+                    warn!("RXSDT_ENUM already initialized");
                 }
 
                 rsdt
@@ -129,7 +128,7 @@ pub unsafe fn init(already_supplied_rsdp: Option<*const u8>) {
                     RxsdtEnum::Xsdt(xsdt)
                 });
                 if !initialized {
-                    error!("RXSDT_ENUM already initialized");
+                    warn!("RXSDT_ENUM already initialized");
                 }
 
                 xsdt
@@ -155,7 +154,10 @@ pub unsafe fn init(already_supplied_rsdp: Option<*const u8>) {
 
             // TODO: Enumerate processors in userspace, and then provide an ACPI-independent interface
             // to initialize enumerated processors to userspace?
+
+            // Initialize MADT for multi-core CPU detection and startup
             Madt::init();
+
             //TODO: support this on any arch
             // SPCR must be initialized after MADT for interrupt controllers
             #[cfg(target_arch = "aarch64")]
@@ -166,7 +168,7 @@ pub unsafe fn init(already_supplied_rsdp: Option<*const u8>) {
             #[cfg(target_arch = "aarch64")]
             gtdt::Gtdt::init();
         } else {
-            error!("NO RSDP FOUND");
+            warn!("NO RSDP FOUND");
         }
     }
 }

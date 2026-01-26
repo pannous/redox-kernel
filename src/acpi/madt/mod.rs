@@ -29,20 +29,32 @@ pub fn madt() -> Option<&'static Madt> {
 }
 pub const FLAG_PCAT: u32 = 1;
 
+/// Start secondary CPUs from device tree (public interface)
+#[cfg(target_arch = "aarch64")]
+pub fn start_secondary_cpus_dtb() {
+    arch::init_from_dtb();
+}
+
 impl Madt {
     pub fn init() {
-        warn!("MADT::init CALLED - Looking for APIC table");
         let madt = Madt::new(find_one_sdt!("APIC"));
 
         if let Some(madt) = madt {
             // safe because no APs have been started yet.
             unsafe { MADT.get().write(Some(madt)) };
 
-            warn!("  APIC: {:>08X}: {}", madt.local_address, madt.flags);
+            info!("APIC: {:>08X}: {}", madt.local_address, madt.flags);
 
             arch::init(madt);
         } else {
-            warn!("MADT::init - No MADT/APIC table found");
+            info!("MADT: No MADT/APIC table found");
+
+            // On aarch64, try DTB-based CPU startup if ACPI MADT is not available
+            #[cfg(target_arch = "aarch64")]
+            {
+                info!("MADT: Attempting DTB-based multi-core initialization");
+                arch::init_from_dtb();
+            }
         }
     }
 

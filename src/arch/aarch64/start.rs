@@ -26,10 +26,6 @@ static mut DATA_TEST_NONZERO: usize = 0xFFFF_FFFF_FFFF_FFFF;
 pub static AP_READY: AtomicBool = AtomicBool::new(false);
 static BSP_READY: AtomicBool = AtomicBool::new(false);
 
-// Debug markers to track execution
-use core::sync::atomic::AtomicU32;
-static DEBUG_MARKER: AtomicU32 = AtomicU32::new(0);
-
 /// Enumerate CPU cores from device tree
 unsafe fn enumerate_cpus_from_dtb(dtb: &Fdt) -> u32 {
     let mut cpu_count = 0;
@@ -221,21 +217,27 @@ unsafe extern "C" fn start(args_ptr: *const KernelArgs) -> ! {
             crate::log::init();
 
             // Initialize devices
-            DEBUG_MARKER.store(100, AtomicOrdering::SeqCst);
+            //DEBUG_MARKER.store(100, AtomicOrdering::SeqCst);
             match dtb_res {
                 Ok(dtb) => {
-                    DEBUG_MARKER.store(200, AtomicOrdering::SeqCst);
+                    //DEBUG_MARKER.store(200, AtomicOrdering::SeqCst);
 
                     // Enumerate CPUs from DTB BEFORE dtb::init
                     let detected_cpus = enumerate_cpus_from_dtb(&dtb);
-                    DEBUG_MARKER.store(300 + detected_cpus, AtomicOrdering::SeqCst);
+                    //DEBUG_MARKER.store(300 + detected_cpus, AtomicOrdering::SeqCst);
                     CPU_COUNT.store(detected_cpus, AtomicOrdering::SeqCst);
 
                     dtb::init(hwdesc_data.map(|slice| (slice.as_ptr() as usize, slice.len())));
                     device::init_devicetree(&dtb);
+
+                    // Start secondary CPUs after DTB/GIC initialization
+                    #[cfg(feature = "multi_core")]
+                    {
+                        crate::acpi::madt::start_secondary_cpus_dtb();
+                    }
                 }
                 Err(err) => {
-                    DEBUG_MARKER.store(999, AtomicOrdering::SeqCst);
+                    //DEBUG_MARKER.store(999, AtomicOrdering::SeqCst);
                     dtb::init(None);
                     warn!("failed to parse DTB: {}", err);
 
@@ -255,11 +257,6 @@ unsafe extern "C" fn start(args_ptr: *const KernelArgs) -> ! {
 
             args.bootstrap()
         };
-
-        // Debug: verify CPU_COUNT before entering kmain
-        let final_count = CPU_COUNT.load(AtomicOrdering::SeqCst);
-        let marker = DEBUG_MARKER.load(AtomicOrdering::SeqCst);
-        debug!("START: Entering kmain with CPU_COUNT={}, DEBUG_MARKER={}", final_count, marker);
 
         crate::kmain(bootstrap);
     }
@@ -329,9 +326,11 @@ pub unsafe extern "C" fn kstart_ap(args_ptr: *const KernelArgsAp) -> ! {
         };
 
         // Wait for BSP to complete initialization
+        debug!("AP CPU {} waiting for BSP_READY", cpu_id.get());
         while !BSP_READY.load(Ordering::SeqCst) {
             core::hint::spin_loop();
         }
+        debug!("AP CPU {} BSP ready, calling kmain_ap", cpu_id.get());
 
         // Call kmain_ap to enter scheduler
         crate::kmain_ap(cpu_id);

@@ -146,6 +146,8 @@ pub fn switch(token: &mut CleanLockToken) -> SwitchResult {
     cpu_stats::add_context_switch();
     percpu.stats.add_context_switch_local();
 
+    let cpu_id = crate::cpu_id();
+
     //set PIT Interrupt counter to 0, giving each process same amount of PIT ticks
     percpu.switch_internals.pit_ticks.set(0);
 
@@ -182,6 +184,8 @@ pub fn switch(token: &mut CleanLockToken) -> SwitchResult {
         let prev_context_guard = unsafe { prev_context_lock.write_arc() };
 
         if !prev_context_guard.is_preemptable() {
+            // Release the lock before returning
+            arch::CONTEXT_SWITCH_LOCK.store(false, Ordering::SeqCst);
             return SwitchResult::AllContextsIdle;
         }
 
