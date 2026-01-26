@@ -348,6 +348,60 @@ impl SchemeList {
         Ok((id, t))
     }
 
+    /// Reserve a scheme ID and name atomically
+    /// Phase 1 of split registration: check existence, allocate ID, and reserve the name
+    pub fn reserve_scheme(&mut self, ns: SchemeNamespace, name: &str) -> Result<SchemeId> {
+        // Check if scheme already exists
+        if let Some(names) = self.names.get(&ns) {
+            if names.contains_key(name) {
+                return Err(Error::new(EEXIST));
+            }
+        }
+
+        // Allocate next available ID
+        if self.next_id >= SCHEME_MAX_SCHEMES {
+            self.next_id = 1;
+        }
+
+        while self.map.contains_key(&SchemeId(self.next_id)) {
+            self.next_id += 1;
+        }
+
+        let id = SchemeId(self.next_id);
+        self.next_id += 1;
+
+        // ATOMICALLY reserve the name to prevent double-reservation
+        match self.names.get_mut(&ns) {
+            Some(ref mut names) => {
+                assert!(
+                    names.insert(name.to_string().into_boxed_str(), id).is_none(),
+                    "Scheme name already reserved"
+                );
+            }
+            _ => {
+                return Err(Error::new(ENODEV));
+            }
+        }
+
+        Ok(id)
+    }
+
+    /// Complete scheme registration
+    /// Phase 2 of split registration: insert the created scheme object
+    pub fn complete_registration(
+        &mut self,
+        id: SchemeId,
+        scheme: KernelSchemes,
+    ) -> Result<()> {
+        // Insert into scheme map (name was already reserved in reserve_scheme)
+        assert!(
+            self.map.insert(id, scheme).is_none(),
+            "Scheme ID collision during registration"
+        );
+
+        Ok(())
+    }
+
     /// Remove a scheme
     pub fn remove(&mut self, id: SchemeId) {
         assert!(self.map.remove(&id).is_some());

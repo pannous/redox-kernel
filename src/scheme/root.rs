@@ -95,24 +95,30 @@ impl KernelScheme for RootScheme {
                 }
 
                 let path_box = path.to_string().into_boxed_str();
-                let mut schemes = scheme::schemes_mut(token.token());
 
-                let (_scheme_id, inner) =
-                    schemes.insert_and_pass(self.scheme_ns, path, |scheme_id| {
-                        let inner = Arc::new(UserInner::new(
-                            self.scheme_id,
-                            scheme_id,
-                            new_close,
-                            id,
-                            path_box,
-                            flags,
-                            context,
-                        ));
-                        (
-                            KernelSchemes::User(UserScheme::new(Arc::downgrade(&inner))),
-                            inner,
-                        )
-                    })?;
+                // Phase 1: Reserve scheme ID and name atomically (short critical section)
+                let scheme_id = {
+                    let mut schemes = scheme::schemes_mut(token.token());
+                    schemes.reserve_scheme(self.scheme_ns, path)?
+                }; // Lock released here - name is now reserved
+
+                // Phase 2: Initialize daemon (no lock held - can access other schemes)
+                let inner = Arc::new(UserInner::new(
+                    self.scheme_id,
+                    scheme_id,
+                    new_close,
+                    id,
+                    path_box,
+                    flags,
+                    context,
+                ));
+                let new_scheme = KernelSchemes::User(UserScheme::new(Arc::downgrade(&inner)));
+
+                // Phase 3: Complete registration by adding scheme object (short critical section)
+                {
+                    let mut schemes = scheme::schemes_mut(token.token());
+                    schemes.complete_registration(scheme_id, new_scheme)?;
+                }
 
                 inner
             };
