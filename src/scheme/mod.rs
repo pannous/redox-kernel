@@ -222,7 +222,8 @@ impl SchemeList {
         self.insert_global(ns, "debug", GlobalSchemes::Debug);
         self.insert_global(ns, "irq", GlobalSchemes::Irq);
         self.insert_global(ns, "kernel.proc", GlobalSchemes::Proc);
-        self.insert_global(ns, "null", GlobalSchemes::Null);
+        // Null scheme provided by nulld daemon, not kernel
+        // self.insert_global(ns, "null", GlobalSchemes::Null);
         self.insert_global(ns, "serio", GlobalSchemes::Serio);
     }
 
