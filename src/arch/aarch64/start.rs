@@ -265,6 +265,15 @@ unsafe extern "C" fn start(args_ptr: *const KernelArgs) -> ! {
             // Activate memory logging
             crate::log::init();
 
+            // Initialize SMP sync variables in freshly-mapped shareable memory
+            // This must happen after allocator::init() so we can allocate frames
+            info!("Initializing SMP sync variables with explicit shareability...");
+            if let Err(e) = crate::arch::smp_sync::init_smp_sync_normal() {
+                error!("Failed to init SMP sync (Normal memory): {}", e);
+            } else {
+                info!("SMP sync initialized successfully in Normal shareable memory");
+            }
+
             // Initialize devices
             //DEBUG_MARKER.store(100, AtomicOrdering::SeqCst);
             match dtb_res {
@@ -377,27 +386,51 @@ global_asm!("
         ldr x2, [x0, #24]
         mov sp, x2
 
-        // Serial debug marker 'D' - About to jump to Rust
+        // Serial debug marker 'D' - About to increment counter
         mov w11, #0x44  // 'D'
         str w11, [x9]
 
-        // Restore args_phys to x0 (required by start_ap function)
-        mov x0, x10
+        // **NEW APPROACH**: Increment sync counter directly in assembly
+        // Load SMP_SYNC_PTR from global (set by BSP)
+        ldr x4, =__smp_sync_ptr_storage
+        ldr x4, [x4]  // Dereference to get actual pointer
 
-        // Ensure instruction cache is coherent after page table changes
-        // ARM requires IC maintenance after MMU reconfiguration
+        // Check if pointer is null
+        cbz x4, .Lno_sync
+
+        // Serial marker 'P' = pointer OK
+        mov w11, #0x50  // 'P'
+        str w11, [x9]
+
+        // Atomic increment of ap_entry_count (first field of SmpSyncBlock)
+        // Use LDADD (atomic add) if available, otherwise use LDXR/STXR loop
+        mov w5, #1
+        dmb ish
+
+    .Latomic_retry:
+        ldaxr w6, [x4]     // Load-exclusive with acquire
+        add w6, w6, w5     // Increment
+        stlxr w7, w6, [x4] // Store-exclusive with release
+        cbnz w7, .Latomic_retry // Retry if store failed
+
+        // Clean cache to PoC
+        dc cvac, x4
         dsb ish
-        isb
 
-        // Load absolute virtual address of start_ap from literal pool
-        ldr x3, .Lstart_ap_addr
+        // Serial marker 'F' = increment done
+        mov w11, #0x46  // 'F'
+        str w11, [x9]
 
-        // Final synchronization before jump
-        dsb ish
-        isb
+        b .Lwfi_loop
 
-        // Jump to Rust start_ap function
-        br x3
+    .Lno_sync:
+        // Serial marker 'N' = pointer null
+        mov w11, #0x4E  // 'N'
+        str w11, [x9]
+
+    .Lwfi_loop:
+        wfi
+        b .Lwfi_loop
 
     .p2align 3
     .Lstart_ap_addr:
@@ -406,114 +439,22 @@ global_asm!("
     start_ap = sym start_ap,
 );
 
-/// Rust entry point for Application Processors (called from assembly kstart_ap)
+/// MINIMAL Rust entry point for Application Processors - just serial writes
 #[unsafe(no_mangle)]
-unsafe extern "C" fn start_ap(args_phys: u64) -> ! {
-    // Write 'E' to serial to confirm Rust entry
+#[inline(never)]
+pub extern "C" fn start_ap(_args_phys: u64) -> ! {
+    // ABSOLUTE MINIMUM - just write to serial, no locals, no function calls
+    let serial = 0x09000000 as *mut u32;
     unsafe {
-        let serial = 0x09000000 as *mut u32;
-        serial.write_volatile(0x45); // 'E'
+        core::ptr::write_volatile(serial, 0x45); // 'E'
+        core::ptr::write_volatile(serial, 0x45); // 'E' again
+        core::ptr::write_volatile(serial, 0x45); // 'E' third time
     }
 
-    // Use DMB (Data Memory Barrier) for inter-CPU synchronization
-    // DMB ISH ensures all prior writes are visible to Inner Shareable domain (all CPUs)
-    unsafe {
-        core::arch::asm!("dmb ish", options(nostack, nomem));
-    }
-
-    // Try BOTH atomic and volatile approaches
-    let old = AP_ENTRY_COUNT.fetch_add(1, Ordering::SeqCst);
-
-    // Also increment volatile counter
-    unsafe {
-        let ptr = &mut AP_ENTRY_VOLATILE as *mut u32;
-        let current = ptr.read_volatile();
-        ptr.write_volatile(current + 1);
-
-        // Force synchronization
-        core::arch::asm!(
-            "dmb ish",          // Data Memory Barrier - Inner Shareable
-            "dc cvac, {addr1}", // Clean atomic counter cache
-            "dc cvac, {addr2}", // Clean volatile counter cache
-            "dmb ish",
-            "dsb sy",
-            "isb",
-            addr1 = in(reg) &AP_ENTRY_COUNT as *const _ as usize,
-            addr2 = in(reg) &AP_ENTRY_VOLATILE as *const _ as usize,
-            options(nostack)
-        );
-    }
-
-    // Read back both to verify
-    let new_val = AP_ENTRY_COUNT.load(Ordering::SeqCst);
-    let volatile_val = unsafe { (&AP_ENTRY_VOLATILE as *const u32).read_volatile() };
-
-    // Write 'F' to show fetch_add completed, then atomic value, then '|', then volatile value
-    unsafe {
-        let serial = 0x09000000 as *mut u32;
-        serial.write_volatile(0x46); // 'F'
-
-        // Write atomic value as hex digit
-        if new_val < 10 {
-            serial.write_volatile(0x30 + new_val as u32); // '0'-'9'
-        } else {
-            serial.write_volatile(0x58); // 'X' for >=10
+    // Infinite loop
+    loop {
+        unsafe {
+            core::arch::asm!("wfi", options(nostack, nomem));
         }
-
-        serial.write_volatile(0x7C); // '|'
-
-        // Write volatile value as hex digit
-        if volatile_val < 10 {
-            serial.write_volatile(0x30 + volatile_val as u32);
-        } else {
-            serial.write_volatile(0x59); // 'Y' for >=10
-        }
-
-        serial.write_volatile(0x20); // space
-    }
-
-    unsafe {
-        let cpu_id = {
-            // Assembly already set up MMU, stack, and VBAR
-            // NOW safe to access virtual memory
-            let args_ptr = (args_phys as usize + crate::PHYS_OFFSET) as *const KernelArgsAp;
-            let args = &*args_ptr;
-
-            let cpu_id = crate::cpu_set::LogicalCpuId::new(args.cpu_id as u32);
-
-            warn!("AP {}: start_ap entered (total entries={})", cpu_id.get(), AP_ENTRY_COUNT.load(Ordering::SeqCst));
-
-            // Initialize paging (MAIR)
-            paging::init();
-
-            warn!("AP {}: Paging initialized", cpu_id.get());
-
-            // Initialize per-CPU block and set TPIDR_EL1
-            crate::misc::init(cpu_id);
-
-            warn!("AP {}: Percpu block initialized", cpu_id.get());
-
-            // Note: GIC CPU interface initialization happens automatically
-            // on GICv2, the CPU interface is banked per-CPU and accessed at
-            // the same address, routed by hardware based on the accessing CPU.
-            // BSP already initialized the GIC distributor and CPU interfaces.
-
-            // Signal readiness
-            AP_READY.store(true, Ordering::SeqCst);
-
-            warn!("AP {}: Signaled readiness", cpu_id.get());
-
-            cpu_id
-        };
-
-        // Wait for BSP to complete initialization
-        debug!("AP CPU {} waiting for BSP_READY", cpu_id.get());
-        while !BSP_READY.load(Ordering::SeqCst) {
-            core::hint::spin_loop();
-        }
-        debug!("AP CPU {} BSP ready, calling kmain_ap", cpu_id.get());
-
-        // Call kmain_ap to enter scheduler
-        crate::kmain_ap(cpu_id);
     }
 }

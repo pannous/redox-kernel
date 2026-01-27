@@ -19,6 +19,9 @@ pub mod misc;
 /// Paging
 pub mod paging;
 
+/// SMP synchronization with cache coherency
+pub mod smp_sync;
+
 pub mod rmm;
 
 /// Initialization and start function

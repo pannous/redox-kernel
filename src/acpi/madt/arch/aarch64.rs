@@ -286,23 +286,9 @@ unsafe fn start_secondary_cpus(giccs: &[&super::MadtGicc]) {
 
     info!("Started {} secondary CPU(s)", ap_count);
 
-    // Force cache invalidation before reading counters
-    unsafe {
-        core::arch::asm!(
-            "dc ivac, {addr1}", // Invalidate atomic counter
-            "dc ivac, {addr2}", // Invalidate volatile counter
-            "dmb ish",
-            "dsb sy",
-            "isb",
-            addr1 = in(reg) &crate::arch::start::AP_ENTRY_COUNT as *const _ as usize,
-            addr2 = in(reg) &crate::arch::start::AP_ENTRY_VOLATILE as *const _ as usize,
-            options(nostack)
-        );
-    }
-
-    let ap_atomic = crate::arch::start::AP_ENTRY_COUNT.load(core::sync::atomic::Ordering::SeqCst);
-    let ap_volatile = unsafe { (&crate::arch::start::AP_ENTRY_VOLATILE as *const u32).read_volatile() };
-    info!("AP_ENTRY_COUNT={} (atomic), {} (volatile)", ap_atomic, ap_volatile);
+    // Read AP entry count using new shareable sync block
+    let ap_entry_count = crate::arch::smp_sync::read_ap_entry();
+    info!("AP_ENTRY_COUNT={} (from shareable sync block)", ap_entry_count);
 }
 
 /// Start secondary CPUs from device tree (without ACPI MADT)
