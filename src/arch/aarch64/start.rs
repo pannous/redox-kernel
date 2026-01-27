@@ -375,6 +375,7 @@ pub struct KernelArgsAp {
     pub page_table: u64,
     pub stack_start: u64,
     pub stack_end: u64,
+    pub kernel_phys_base: u64,  // NEW: Physical base address of kernel
 }
 
 // External declaration for assembly entry point
@@ -485,22 +486,57 @@ global_asm!("
         dsb ish
         isb
 
-        // Load the high virtual address of start() using ADR
-        // ADR works in identity-mapped space to get label address
-        adr x8, start_addr
-        ldr x8, [x8]           // x8 now contains virtual address of start()
-
-        // Serial marker 'K' - Address loaded
+        // Serial marker 'K' - Calculating PHYS_OFFSET address
         mov w11, #0x4B  // 'K'
         str w11, [x9]
 
-        // DIAGNOSTIC: Print full 64-bit address as 16 hex digits
-        // Format: FFFF_FFFF_0000_7530 (example)
-        mov x12, x8
+        // Load kernel_phys_base from KernelArgsAp (offset 32)
+        // x10 still contains args_phys (physical address of struct)
+        ldr x11, [x10, #32]  // x11 = kernel_phys_base
 
-        // Print all 16 nibbles (64 bits)
-        .macro print_nibble shift
-        lsr x13, x12, #\\shift
+        // Load KERNEL_OFFSET constant (0xFFFF_FF00_0000_0000)
+        movz x12, #0x0000, lsl #0
+        movk x12, #0x0000, lsl #16
+        movk x12, #0xFF00, lsl #32
+        movk x12, #0xFFFF, lsl #48
+
+        // Load address of ap_entry_minimal (KERNEL_OFFSET virtual address)
+        adr x8, target_addr
+        ldr x8, [x8]          // x8 = KERNEL_OFFSET virtual address
+
+        // Convert to physical: phys = virtual - KERNEL_OFFSET + kernel_phys_base
+        sub x8, x8, x12       // x8 = offset from KERNEL_OFFSET
+        add x8, x8, x11       // x8 = physical address
+
+        // Serial marker 'P' - Physical address calculated
+        mov w11, #0x50  // 'P'
+        str w11, [x9]
+
+        // Load PHYS_OFFSET constant (0xFFFF_8000_0000_0000)
+        movz x6, #0x0000, lsl #0
+        movk x6, #0x0000, lsl #16
+        movk x6, #0x8000, lsl #32
+        movk x6, #0xFFFF, lsl #48
+
+        // Convert physical to PHYS_OFFSET virtual: virt = phys + PHYS_OFFSET
+        add x8, x8, x6        // x8 = PHYS_OFFSET virtual address
+
+        // Serial marker 'V' - PHYS_OFFSET virtual address ready
+        mov w11, #0x56  // 'V'
+        str w11, [x9]
+
+        // DIAGNOSTIC: Print first 4 nibbles of address
+        mov x12, x8
+        lsr x13, x12, #60
+        and x13, x13, #0xF
+        add w13, w13, #0x30
+        cmp w13, #0x39
+        ble 1f
+        add w13, w13, #7
+    1:
+        str w13, [x9]
+
+        lsr x13, x12, #56
         and x13, x13, #0xF
         add w13, w13, #0x30
         cmp w13, #0x39
@@ -508,52 +544,44 @@ global_asm!("
         add w13, w13, #7
     2:
         str w13, [x9]
-        .endm
 
-        print_nibble 60
-        print_nibble 56
-        print_nibble 52
-        print_nibble 48
-        mov w11, #0x5F; str w11, [x9]  // '_'
-        print_nibble 44
-        print_nibble 40
-        print_nibble 36
-        print_nibble 32
-        mov w11, #0x5F; str w11, [x9]  // '_'
-        print_nibble 28
-        print_nibble 24
-        print_nibble 20
-        print_nibble 16
-        mov w11, #0x5F; str w11, [x9]  // '_'
-        print_nibble 12
-        print_nibble 8
-        print_nibble 4
-        print_nibble 0
+        lsr x13, x12, #52
+        and x13, x13, #0xF
+        add w13, w13, #0x30
+        cmp w13, #0x39
+        ble 3f
+        add w13, w13, #7
+    3:
+        str w13, [x9]
 
-        // Space marker
-        mov w11, #0x20  // ' '
-        str w11, [x9]
+        lsr x13, x12, #48
+        and x13, x13, #0xF
+        add w13, w13, #0x30
+        cmp w13, #0x39
+        ble 4f
+        add w13, w13, #7
+    4:
+        str w13, [x9]
 
-        // Flush instruction cache before jumping to virtual address
+        mov w11, #0x20; str w11, [x9]  // Space
+
+        // Flush instruction cache
         ic iallu
         dsb ish
         isb
 
-        // Serial marker 'M' - About to jump after I-cache flush
-        mov w11, #0x4D  // 'M'
+        // Serial marker '>' - About to jump
+        mov w11, #0x3E  // '>'
         str w11, [x9]
 
-        // DIAGNOSTIC: Jump to minimal Rust entry
-        mov w11, #0x3E  // '>' = about to jump
-        str w11, [x9]
-
-        br x8  // Jump to ap_entry_minimal
+        // Jump to PHYS_OFFSET virtual address
+        br x8
 
         // Should never reach here
         mov w11, #0x58  // 'X' = jump failed!
         str w11, [x9]
 
-    start_addr:
+    target_addr:
         .quad {ap_entry}
 
     .Lap_stuck:

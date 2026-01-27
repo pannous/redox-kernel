@@ -227,6 +227,9 @@ unsafe fn start_secondary_cpus(giccs: &[&super::MadtGicc]) {
         let args_phys = args_frame.base().data() as u64;
         let args_virt = (args_phys as usize + crate::PHYS_OFFSET) as *mut crate::arch::start::KernelArgsAp;
 
+        // Get kernel physical base from memory map (needed for args and entry point)
+        let kernel_phys_base = crate::startup::memory::kernel_phys_base() as u64;
+
         // Write args to allocated frame
         unsafe {
             args_virt.write(crate::arch::start::KernelArgsAp {
@@ -234,6 +237,7 @@ unsafe fn start_secondary_cpus(giccs: &[&super::MadtGicc]) {
                 page_table: page_table_phys,
                 stack_start: stack_start as u64,
                 stack_end: stack_end as u64,
+                kernel_phys_base,  // NEW: Pass kernel physical base
             });
         }
 
@@ -245,9 +249,6 @@ unsafe fn start_secondary_cpus(giccs: &[&super::MadtGicc]) {
         //
         // We need to convert the current virtual address back to physical.
         use crate::arch::consts::KERNEL_OFFSET;
-
-        // Get kernel physical base from memory map
-        let kernel_phys_base = crate::startup::memory::kernel_phys_base() as u64;
 
         // Calculate offset within kernel and add to physical base
         let offset = entry_point_virt - KERNEL_OFFSET as u64;
@@ -345,6 +346,9 @@ unsafe fn start_secondary_cpus_from_dtb(total_cpus: usize) {
         let args_phys = args_frame.base().data() as u64;
         let args_virt = (args_phys as usize + crate::PHYS_OFFSET) as *mut crate::arch::start::KernelArgsAp;
 
+        // Get kernel physical base from memory map (needed for args and entry point)
+        let kernel_phys_base = crate::startup::memory::kernel_phys_base() as u64;
+
         // Write args to allocated frame
         unsafe {
             args_virt.write(crate::arch::start::KernelArgsAp {
@@ -352,6 +356,7 @@ unsafe fn start_secondary_cpus_from_dtb(total_cpus: usize) {
                 page_table: page_table_phys,
                 stack_start: stack_start as u64,
                 stack_end: stack_end as u64,
+                kernel_phys_base,  // NEW: Pass kernel physical base
             });
         }
 
@@ -363,9 +368,6 @@ unsafe fn start_secondary_cpus_from_dtb(total_cpus: usize) {
         //
         // We need to convert the current virtual address back to physical.
         use crate::arch::consts::KERNEL_OFFSET;
-
-        // Get kernel physical base from memory map
-        let kernel_phys_base = crate::startup::memory::kernel_phys_base() as u64;
 
         // Calculate offset within kernel and add to physical base
         let offset = entry_point_virt - KERNEL_OFFSET as u64;
