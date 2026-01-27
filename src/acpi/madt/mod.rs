@@ -37,15 +37,18 @@ pub fn start_secondary_cpus_dtb() {
 
 impl Madt {
     pub fn init() {
+        info!("MADT: Initializing Multiple APIC Descriptor Table");
         let madt = Madt::new(find_one_sdt!("APIC"));
 
         if let Some(madt) = madt {
             // safe because no APs have been started yet.
             unsafe { MADT.get().write(Some(madt)) };
 
-            info!("APIC: {:>08X}: {}", madt.local_address, madt.flags);
+            info!("MADT: Found APIC table, local_address=0x{:08X}, flags=0x{:x}",
+                  madt.local_address, madt.flags);
 
             arch::init(madt);
+            info!("MADT: Architecture-specific initialization completed");
         } else {
             info!("MADT: No MADT/APIC table found");
 

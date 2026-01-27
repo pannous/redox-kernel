@@ -94,15 +94,19 @@ pub static RXSDT_ENUM: Once<RxsdtEnum> = Once::new();
 /// Parse the ACPI tables to gather CPU, interrupt, and timer information
 pub unsafe fn init(already_supplied_rsdp: Option<*const u8>) {
     unsafe {
+        info!("ACPI: Initializing ACPI subsystem");
+
         {
             let mut sdt_ptrs = SDT_POINTERS.write();
             *sdt_ptrs = Some(HashMap::new());
         }
 
         // Search for RSDP
+        info!("ACPI: Searching for RSDP");
         let rsdp_opt = Rsdp::get_rsdp(&mut KernelMapper::lock(), already_supplied_rsdp);
 
         if let Some(rsdp) = rsdp_opt {
+            info!("ACPI: RSDP found at address 0x{:x}", rsdp.sdt_address());
             let rxsdt = get_sdt(rsdp.sdt_address(), &mut KernelMapper::lock());
 
             let rxsdt = if let Some(rsdt) = Rsdt::new(rxsdt) {
@@ -156,7 +160,9 @@ pub unsafe fn init(already_supplied_rsdp: Option<*const u8>) {
             // to initialize enumerated processors to userspace?
 
             // Initialize MADT for multi-core CPU detection and startup
+            info!("ACPI: Initializing MADT (Multiple APIC Descriptor Table)");
             Madt::init();
+            info!("ACPI: MADT initialization completed");
 
             //TODO: support this on any arch
             // SPCR must be initialized after MADT for interrupt controllers

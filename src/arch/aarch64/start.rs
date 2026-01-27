@@ -217,7 +217,7 @@ unsafe extern "C" fn start(args_ptr: *const KernelArgs) -> ! {
             debug!("DTB: hwdesc_base=0x{:x}, hwdesc_size=0x{:x}", args.hwdesc_base, args.hwdesc_size);
             if let Some(data) = hwdesc_data {
                 debug!("DTB: Creating hwdesc_data slice");
-                error!("*** DTB: Parsing DTB from hwdesc_data, size={} ***", data.len());
+                info!("DTB: Parsed DTB from hwdesc_data, size={}", data.len());
             } else {
                 debug!("DTB: No hwdesc_base, hwdesc_data is None");
             }
