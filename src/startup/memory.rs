@@ -179,6 +179,16 @@ pub fn register_memory_region(base: usize, size: usize, kind: BootloaderMemoryKi
     }
 }
 
+/// Get kernel physical base address from the memory map
+pub fn kernel_phys_base() -> usize {
+    unsafe {
+        (*MEMORY_MAP.get())
+            .kernel()
+            .expect("Kernel memory area not found")
+            .start
+    }
+}
+
 fn register_bootloader_areas(areas_base: usize, areas_size: usize) {
     let bootloader_areas = unsafe {
         slice::from_raw_parts(
@@ -340,6 +350,14 @@ unsafe fn map_memory<A: Arch>(areas: &[MemoryArea], mut bump_allocator: &mut Bum
             let flush = mapper
                 .map_phys(virt, phys, flags)
                 .expect("failed to map frame");
+            flush.ignore(); // Not the active table
+
+            // CRITICAL for SMP: Identity map kernel so APs can execute from physical address
+            // PSCI starts APs with MMU off at physical entry point
+            let virt_identity = VirtualAddress::new(kernel_base + i * PAGE_SIZE);
+            let flush = mapper
+                .map_phys(virt_identity, phys, flags)
+                .expect("failed to identity map kernel");
             flush.ignore(); // Not the active table
         }
 

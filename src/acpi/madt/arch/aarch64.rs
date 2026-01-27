@@ -240,18 +240,21 @@ unsafe fn start_secondary_cpus(giccs: &[&super::MadtGicc]) {
         // Get entry point address (PHYSICAL not virtual!)
         let entry_point_virt = crate::arch::start::kstart_ap as *const () as u64;
 
-        // Kernel text is identity-mapped minus PHYS_OFFSET
-        // For aarch64, PHYS_OFFSET = 0xFFFF_8000_0000_0000
-        // So virt addresses in range [PHYS_OFFSET, PHYS_OFFSET + X] map to phys [0, X]
-        let entry_point_phys = if entry_point_virt >= crate::PHYS_OFFSET as u64 {
-            entry_point_virt - crate::PHYS_OFFSET as u64
-        } else {
-            // Already physical or in low memory
-            entry_point_virt
-        };
+        // On aarch64, bootloader loads kernel at some physical address
+        // and maps it to virtual address at KERNEL_OFFSET (0xFFFF_FF00_0000_0000).
+        //
+        // We need to convert the current virtual address back to physical.
+        use crate::arch::consts::KERNEL_OFFSET;
 
-        info!("PSCI CPU_ON: mpidr=0x{:x}, virt=0x{:x}, phys=0x{:x}, context=0x{:x}",
-              mpidr, entry_point_virt, entry_point_phys, args_phys);
+        // Get kernel physical base from memory map
+        let kernel_phys_base = crate::startup::memory::kernel_phys_base() as u64;
+
+        // Calculate offset within kernel and add to physical base
+        let offset = entry_point_virt - KERNEL_OFFSET as u64;
+        let entry_point_phys = kernel_phys_base + offset;
+
+        info!("PSCI CPU_ON: mpidr=0x{:x}, virt=0x{:x}, phys=0x{:x}, kbase=0x{:x}, context=0x{:x}",
+              mpidr, entry_point_virt, entry_point_phys, kernel_phys_base, args_phys);
 
         // Reset AP_READY flag
         crate::arch::start::AP_READY.store(false, Ordering::SeqCst);
@@ -352,18 +355,21 @@ unsafe fn start_secondary_cpus_from_dtb(total_cpus: usize) {
         // Get entry point address (PHYSICAL not virtual!)
         let entry_point_virt = crate::arch::start::kstart_ap as *const () as u64;
 
-        // Kernel text is identity-mapped minus PHYS_OFFSET
-        // For aarch64, PHYS_OFFSET = 0xFFFF_8000_0000_0000
-        // So virt addresses in range [PHYS_OFFSET, PHYS_OFFSET + X] map to phys [0, X]
-        let entry_point_phys = if entry_point_virt >= crate::PHYS_OFFSET as u64 {
-            entry_point_virt - crate::PHYS_OFFSET as u64
-        } else {
-            // Already physical or in low memory
-            entry_point_virt
-        };
+        // On aarch64, bootloader loads kernel at some physical address
+        // and maps it to virtual address at KERNEL_OFFSET (0xFFFF_FF00_0000_0000).
+        //
+        // We need to convert the current virtual address back to physical.
+        use crate::arch::consts::KERNEL_OFFSET;
 
-        info!("PSCI CPU_ON: mpidr=0x{:x}, virt=0x{:x}, phys=0x{:x}, context=0x{:x}",
-              mpidr, entry_point_virt, entry_point_phys, args_phys);
+        // Get kernel physical base from memory map
+        let kernel_phys_base = crate::startup::memory::kernel_phys_base() as u64;
+
+        // Calculate offset within kernel and add to physical base
+        let offset = entry_point_virt - KERNEL_OFFSET as u64;
+        let entry_point_phys = kernel_phys_base + offset;
+
+        info!("PSCI CPU_ON: mpidr=0x{:x}, virt=0x{:x}, phys=0x{:x}, kbase=0x{:x}, context=0x{:x}",
+              mpidr, entry_point_virt, entry_point_phys, kernel_phys_base, args_phys);
 
         // Reset AP_READY flag
         crate::arch::start::AP_READY.store(false, Ordering::SeqCst);

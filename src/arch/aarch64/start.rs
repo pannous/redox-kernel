@@ -323,60 +323,92 @@ pub struct KernelArgsAp {
     pub stack_end: u64,
 }
 
-/// Assembly entry point for Application Processors
+// External declaration for assembly entry point
+unsafe extern "C" {
+    pub fn kstart_ap();
+}
+
+/// Assembly entry point for Application Processors (called by PSCI)
 ///
-/// Called by PSCI CPU_ON with:
-/// - x0 = context parameter (args_phys - physical address)
-/// - MMU state undefined (might be on or off)
-/// - EL1
+/// CRITICAL: PSCI starts with MMU in unknown state. Symbols are linked at KERNEL_OFFSET
+/// virtual addresses, but PC is at physical/identity-mapped address.
+global_asm!("
+    .globl kstart_ap
+    kstart_ap:
+        // x0 = args_phys (physical address of KernelArgsAp struct)
+
+        // Save x0 for later - we'll need it after page table setup
+        mov x10, x0
+
+        // Load page_table (offset 8 in KernelArgsAp)
+        ldr x1, [x0, #8]
+        msr ttbr1_el1, x1
+        msr ttbr0_el1, x1
+
+        // Flush TLB
+        dsb sy
+        tlbi vmalle1
+        dsb sy
+        isb
+
+        // Load stack_end (offset 24 in KernelArgsAp)
+        ldr x2, [x0, #24]
+        mov sp, x2
+
+        // Calculate virtual address to jump to:
+        // We want to jump to .Lvirt_entry in PHYS_OFFSET space
+        // PHYS_OFFSET = physical + 0x0000800000000000
+
+        // Get physical address of .Lvirt_entry
+        adr x3, .Lvirt_entry
+        // Add PHYS_OFFSET to get virtual address
+        movz x4, #0x0000, lsl #48
+        movk x4, #0x8000, lsl #32  // x4 = 0x0000800000000000 (PHYS_OFFSET)
+        add x3, x3, x4
+
+        // Jump to virtual address in PHYS_OFFSET space
+        br x3
+
+    // This code executes at PHYS_OFFSET virtual address
+    .Lvirt_entry:
+        // DEBUG: Test if we reach here
+    .Lloop2:
+        b .Lloop2
+
+        // Now we can access global symbols!
+        // Increment AP_ENTRY_COUNT
+        adrp x3, {ap_count}
+        add x3, x3, :lo12:{ap_count}
+    .Lretry:
+        ldaxr w4, [x3]
+        add w4, w4, #1
+        stlxr w5, w4, [x3]
+        cbnz w5, .Lretry
+
+        // Restore args and call start_ap
+        mov x0, x10
+        b {start_ap}
+    ",
+    start_ap = sym start_ap,
+    ap_count = sym AP_ENTRY_COUNT,
+);
+
+/// Rust entry point for Application Processors (called from assembly kstart_ap)
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn kstart_ap(args_phys: u64) -> ! {
+unsafe extern "C" fn start_ap(args_phys: u64) -> ! {
     // Increment entry counter FIRST - before ANY other operations
     AP_ENTRY_COUNT.fetch_add(1, Ordering::SeqCst);
 
     unsafe {
         let cpu_id = {
+            // Assembly already set up MMU, stack, and VBAR
             // Convert physical address to virtual address
             let args_ptr = (args_phys as usize + crate::PHYS_OFFSET) as *const KernelArgsAp;
             let args = &*args_ptr;
 
             let cpu_id = crate::cpu_set::LogicalCpuId::new(args.cpu_id as u32);
-            let stack_end = args.stack_end;
-            let page_table = args.page_table;
 
-            warn!("AP {}: kstart_ap entered (total entries={})", cpu_id.get(), AP_ENTRY_COUNT.load(Ordering::SeqCst));
-
-            // Set up exception vectors (VBAR_EL1)
-            core::arch::asm!(
-                "ldr x9, =exception_vector_base",
-                "msr vbar_el1, x9",
-                out("x9") _,
-            );
-
-            warn!("AP {}: VBAR set", cpu_id.get());
-
-            // Set up stack pointer from args
-            core::arch::asm!(
-                "mov sp, {}",
-                in(reg) stack_end,
-            );
-
-            warn!("AP {}: Stack set to 0x{:x}", cpu_id.get(), stack_end);
-
-            // Configure page tables for this CPU (TTBR1_EL1)
-            crate::device::cpu::registers::control_regs::ttbr1_el1_write(page_table);
-
-            warn!("AP {}: TTBR1 set to 0x{:x}", cpu_id.get(), page_table);
-
-            // Flush TLB
-            core::arch::asm!(
-                "dsb sy",
-                "tlbi vmalle1",
-                "dsb sy",
-                "isb",
-            );
-
-            warn!("AP {}: TLB flushed", cpu_id.get());
+            warn!("AP {}: start_ap entered (total entries={})", cpu_id.get(), AP_ENTRY_COUNT.load(Ordering::SeqCst));
 
             // Initialize paging (MAIR)
             paging::init();
