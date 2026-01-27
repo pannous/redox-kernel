@@ -29,6 +29,9 @@ static BSP_READY: AtomicBool = AtomicBool::new(false);
 /// Counter to track how many APs actually entered kstart_ap
 pub static AP_ENTRY_COUNT: AtomicU32 = AtomicU32::new(0);
 
+/// Alternative counter using volatile ptr (bypasses atomic infrastructure for testing)
+pub static mut AP_ENTRY_VOLATILE: u32 = 0;
+
 /// Enumerate CPU cores from device tree
 unsafe fn enumerate_cpus_from_dtb(dtb: &Fdt) -> u32 {
     let mut cpu_count = 0;
@@ -381,9 +384,19 @@ global_asm!("
         // Restore args_phys to x0 (required by start_ap function)
         mov x0, x10
 
+        // Ensure instruction cache is coherent after page table changes
+        // ARM requires IC maintenance after MMU reconfiguration
+        dsb ish
+        isb
+
         // Load absolute virtual address of start_ap from literal pool
-        // This works because the literal pool is identity-mapped
         ldr x3, .Lstart_ap_addr
+
+        // Final synchronization before jump
+        dsb ish
+        isb
+
+        // Jump to Rust start_ap function
         br x3
 
     .p2align 3
@@ -402,38 +415,61 @@ unsafe extern "C" fn start_ap(args_phys: u64) -> ! {
         serial.write_volatile(0x45); // 'E'
     }
 
-    // Ensure data cache is coherent before atomic operation
+    // Use DMB (Data Memory Barrier) for inter-CPU synchronization
+    // DMB ISH ensures all prior writes are visible to Inner Shareable domain (all CPUs)
     unsafe {
-        core::arch::asm!("dsb sy", options(nostack, nomem));
+        core::arch::asm!("dmb ish", options(nostack, nomem));
     }
 
-    // Increment entry counter - with explicit memory barrier
+    // Try BOTH atomic and volatile approaches
     let old = AP_ENTRY_COUNT.fetch_add(1, Ordering::SeqCst);
 
-    // Force full barrier and cache flush
+    // Also increment volatile counter
     unsafe {
+        let ptr = &mut AP_ENTRY_VOLATILE as *mut u32;
+        let current = ptr.read_volatile();
+        ptr.write_volatile(current + 1);
+
+        // Force synchronization
         core::arch::asm!(
-            "dsb sy",
-            "dc cvac, {addr}",  // Clean data cache by VA to point of coherency
+            "dmb ish",          // Data Memory Barrier - Inner Shareable
+            "dc cvac, {addr1}", // Clean atomic counter cache
+            "dc cvac, {addr2}", // Clean volatile counter cache
+            "dmb ish",
             "dsb sy",
             "isb",
-            addr = in(reg) &AP_ENTRY_COUNT as *const _ as usize,
+            addr1 = in(reg) &AP_ENTRY_COUNT as *const _ as usize,
+            addr2 = in(reg) &AP_ENTRY_VOLATILE as *const _ as usize,
             options(nostack)
         );
     }
 
-    // Read back to verify
+    // Read back both to verify
     let new_val = AP_ENTRY_COUNT.load(Ordering::SeqCst);
+    let volatile_val = unsafe { (&AP_ENTRY_VOLATILE as *const u32).read_volatile() };
 
-    // Write 'F' to show fetch_add completed
+    // Write 'F' to show fetch_add completed, then atomic value, then '|', then volatile value
     unsafe {
         let serial = 0x09000000 as *mut u32;
         serial.write_volatile(0x46); // 'F'
 
-        // Write value as hex digit (0-9)
+        // Write atomic value as hex digit
         if new_val < 10 {
             serial.write_volatile(0x30 + new_val as u32); // '0'-'9'
+        } else {
+            serial.write_volatile(0x58); // 'X' for >=10
         }
+
+        serial.write_volatile(0x7C); // '|'
+
+        // Write volatile value as hex digit
+        if volatile_val < 10 {
+            serial.write_volatile(0x30 + volatile_val as u32);
+        } else {
+            serial.write_volatile(0x59); // 'Y' for >=10
+        }
+
+        serial.write_volatile(0x20); // space
     }
 
     unsafe {
