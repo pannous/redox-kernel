@@ -410,58 +410,74 @@ global_asm!("
         dsb sy
         isb
 
-        // Serial debug marker 'B' - Page tables loaded
+        // Serial debug marker 'B' - Page tables loaded, MMU enabled
         mov w11, #0x42  // 'B'
         str w11, [x9]
 
-        // CRITICAL: Setup exception handlers BEFORE Rust code
-        // Mirrors BSP setup - prevents silent crashes on exceptions
+        // **CRITICAL FIX**: Jump to virtual address space!
+        //
+        // The issue: After MMU enable, PC is at physical/identity address (0x8e0fXXXX)
+        // but symbols are at virtual address (0xffffff00XXXXXXXX).
+        // PC-relative addressing doesn't work across this gap.
+        //
+        // Solution: Build virtual address using MOV immediate instructions
+        // Then branch to it explicitly.
+        //
+        // Get offset of next instruction from kernel base
+        adr x3, .Lcontinue_virt  // x3 = physical address
+        movz x4, #0x0000, lsl #16  // kernel phys base low (will adjust)
+        movk x4, #0x8e0f, lsl #16  // 0x8e0f0000
+        sub x3, x3, x4             // x3 = offset from kernel base
+
+        // Build virtual address = KERNEL_OFFSET + offset
+        // KERNEL_OFFSET = 0xffffff00_00000000
+        movz x4, #0x0000, lsl #0   // bits 0-15
+        movk x4, #0x0000, lsl #16  // bits 16-31
+        movk x4, #0xff00, lsl #32  // bits 32-47
+        movk x4, #0xffff, lsl #48  // bits 48-63
+        add x3, x3, x4             // x3 = virtual address
+
+        // Write marker showing we computed address
+        mov w11, #0x56  // 'V'
+        str w11, [x9]
+
+        // Jump to virtual space
+        br x3
+
+    .Lcontinue_virt:
+        // NOW we're in virtual address space! PC is at 0xffffff00_xxxxxxxx
+        // Skip serial markers - just set up and jump to Rust!
+
+        // Convert args_phys (x10) to virtual address
+        // args_virt = PHYS_OFFSET + args_phys
+        // PHYS_OFFSET = 0xFFFF_8000_0000_0000
+        movz x6, #0x0000, lsl #0
+        movk x6, #0x0000, lsl #16
+        movk x6, #0x8000, lsl #32
+        movk x6, #0xFFFF, lsl #48
+        add x10, x10, x6  // x10 now points to args in virtual space
+
+        // Setup exception handlers
         ldr x4, =exception_vector_base
         msr vbar_el1, x4
         isb
 
-        // Serial debug marker 'C' - VBAR set
-        mov w11, #0x43  // 'C'
-        str w11, [x9]
-
         // Load stack_end (offset 24 in KernelArgsAp)
-        ldr x2, [x0, #24]
+        ldr x2, [x10, #24]
         mov sp, x2
 
-        // Serial debug marker 'D' - About to jump to shared start()
-        mov w11, #0x44  // 'D'
-        str w11, [x9]
+        // Restore args pointer to x0 (start() expects it there)
+        mov x0, x10
 
-        // **NEW APPROACH**: Jump to BSP's start() function (proven to work)
-        // instead of separate start_ap function
-        // x0 = args_phys (already set, will be passed to start())
-        // start() will detect this is an AP by reading MPIDR_EL1
-
-        // Serial marker 'J' = about to jump
-        mov w11, #0x4A  // 'J'
-        str w11, [x9]
-
-        // Clear link register like BSP does
+        // Clear link register
         mov lr, #0
 
-        // Serial marker 'K' = about to load address
-        mov w11, #0x4B  // 'K'
-        str w11, [x9]
-
-        // Load ABSOLUTE address from literal pool (not PC-relative!)
-        // This must be done AFTER MMU is enabled and we're in virtual space
-        ldr x3, .Lstart_addr_pool
-
-        // Serial marker 'L' = address loaded
-        mov w11, #0x4C  // 'L'
-        str w11, [x9]
-
-        // Final synchronization before jump
+        // Final synchronization
         dsb ish
         isb
 
-        // Jump via register
-        br x3
+        // Jump to start() - NOW it should work!
+        b {start}
 
         // This should NEVER execute if branch succeeds
         mov w11, #0x58  // 'X' = branch failed!
@@ -469,10 +485,6 @@ global_asm!("
     .Lap_stuck:
         wfi
         b .Lap_stuck
-
-    .p2align 3
-    .Lstart_addr_pool:
-        .quad {start}
     ",
     start = sym start,
 );
