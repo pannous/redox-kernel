@@ -37,6 +37,12 @@ __vec_03:
     // Synchronous
     .align 7
 __vec_04:
+    // EARLY DEBUG: Write 'S' to serial if we take sync exception
+    stp x0, x1, [sp, #-16]!
+    mov x0, #0x09000000
+    mov w1, #0x53  // 'S'
+    str w1, [x0]
+    ldp x0, x1, [sp], #16
     b       synchronous_exception_at_el1_with_spx
     b       __vec_04
 
@@ -49,12 +55,22 @@ __vec_05:
     // FIQ
     .align 7
 __vec_06:
+    stp x0, x1, [sp, #-16]!
+    mov x0, #0x09000000
+    mov w1, #0x46  // 'F' = FIQ
+    str w1, [x0]
+    ldp x0, x1, [sp], #16
     b       unhandled_exception
     b       __vec_06
 
     // SError
     .align 7
 __vec_07:
+    stp x0, x1, [sp, #-16]!
+    mov x0, #0x09000000
+    mov w1, #0x45  // 'E' = SError
+    str w1, [x0]
+    ldp x0, x1, [sp], #16
     b       unhandled_exception
     b       __vec_07
 

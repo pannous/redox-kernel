@@ -444,15 +444,15 @@ global_asm!("
         // Clear link register like BSP does
         mov lr, #0
 
-        // Serial marker 'K' = about to compute address
+        // Serial marker 'K' = about to load address
         mov w11, #0x4B  // 'K'
         str w11, [x9]
 
-        // Compute address of start using ADRP/ADD (PC-relative page + offset)
-        adrp x3, {start}
-        add x3, x3, :lo12:{start}
+        // Load ABSOLUTE address from literal pool (not PC-relative!)
+        // This must be done AFTER MMU is enabled and we're in virtual space
+        ldr x3, .Lstart_addr_pool
 
-        // Serial marker 'L' = address computed
+        // Serial marker 'L' = address loaded
         mov w11, #0x4C  // 'L'
         str w11, [x9]
 
@@ -469,6 +469,10 @@ global_asm!("
     .Lap_stuck:
         wfi
         b .Lap_stuck
+
+    .p2align 3
+    .Lstart_addr_pool:
+        .quad {start}
     ",
     start = sym start,
 );
