@@ -29,6 +29,11 @@ static BSP_READY: AtomicBool = AtomicBool::new(false);
 /// Counter to track how many APs actually entered kstart_ap
 pub static AP_ENTRY_COUNT: AtomicU32 = AtomicU32::new(0);
 
+/// Per-CPU flag to indicate if this CPU is an AP (set by assembly before jumping to start)
+/// BSP never sets this, so it stays false for BSP
+#[unsafe(no_mangle)]
+static mut IS_AP_FLAG: bool = false;
+
 /// Alternative counter using volatile ptr (bypasses atomic infrastructure for testing)
 pub static mut AP_ENTRY_VOLATILE: u32 = 0;
 
@@ -151,7 +156,44 @@ global_asm!("
 );
 
 /// The entry to Rust, all things must be initialized
+/// This is now a SHARED entry point for both BSP and APs!
+/// - BSP: x0 = KernelArgs*
+/// - AP:  x0 = KernelArgsAp* (phys addr)
+/// We detect which one by reading MPIDR_EL1 (BSP has MPIDR=0)
 unsafe extern "C" fn start(args_ptr: *const KernelArgs) -> ! {
+    // Write serial marker to confirm we're in Rust!
+    unsafe {
+        let serial = 0x09000000 as *mut u32;
+        core::ptr::write_volatile(serial, 0x52); // 'R' = Rust entry!
+    }
+
+    // Read MPIDR_EL1 to detect if this is BSP or AP
+    let mpidr: u64;
+    unsafe {
+        core::arch::asm!("mrs {}, mpidr_el1", out(reg) mpidr);
+    }
+
+    // Check if this is an AP (MPIDR != 0 for APs)
+    // Note: We mask to get just the affinity bits, ignoring reserved bits
+    let affinity = mpidr & 0xFF_00FF_FFFF;
+
+    if affinity != 0 {
+        // This is an AP! Branch to AP initialization
+        unsafe {
+            let serial = 0x09000000 as *mut u32;
+            core::ptr::write_volatile(serial, 0x41); // 'A' = AP detected
+            core::ptr::write_volatile(serial, 0x50); // 'P'
+        }
+
+        start_ap_shared(args_ptr as usize);
+    }
+
+    // This is the BSP - continue with normal initialization
+    unsafe {
+        let serial = 0x09000000 as *mut u32;
+        core::ptr::write_volatile(serial, 0x42); // 'B' = BSP
+    }
+
     unsafe {
         let bootstrap = {
             let args = args_ptr.read();
@@ -386,75 +428,95 @@ global_asm!("
         ldr x2, [x0, #24]
         mov sp, x2
 
-        // Serial debug marker 'D' - About to increment counter
+        // Serial debug marker 'D' - About to jump to shared start()
         mov w11, #0x44  // 'D'
         str w11, [x9]
 
-        // **NEW APPROACH**: Increment sync counter directly in assembly
-        // Load SMP_SYNC_PTR from global (set by BSP)
-        ldr x4, =__smp_sync_ptr_storage
-        ldr x4, [x4]  // Dereference to get actual pointer
+        // **NEW APPROACH**: Jump to BSP's start() function (proven to work)
+        // instead of separate start_ap function
+        // x0 = args_phys (already set, will be passed to start())
+        // start() will detect this is an AP by reading MPIDR_EL1
 
-        // Check if pointer is null
-        cbz x4, .Lno_sync
-
-        // Serial marker 'P' = pointer OK
-        mov w11, #0x50  // 'P'
+        // Serial marker 'J' = about to jump
+        mov w11, #0x4A  // 'J'
         str w11, [x9]
 
-        // Atomic increment of ap_entry_count (first field of SmpSyncBlock)
-        // Use LDADD (atomic add) if available, otherwise use LDXR/STXR loop
-        mov w5, #1
-        dmb ish
+        // Clear link register like BSP does
+        mov lr, #0
 
-    .Latomic_retry:
-        ldaxr w6, [x4]     // Load-exclusive with acquire
-        add w6, w6, w5     // Increment
-        stlxr w7, w6, [x4] // Store-exclusive with release
-        cbnz w7, .Latomic_retry // Retry if store failed
+        // Serial marker 'K' = about to compute address
+        mov w11, #0x4B  // 'K'
+        str w11, [x9]
 
-        // Clean cache to PoC
-        dc cvac, x4
+        // Compute address of start using ADRP/ADD (PC-relative page + offset)
+        adrp x3, {start}
+        add x3, x3, :lo12:{start}
+
+        // Serial marker 'L' = address computed
+        mov w11, #0x4C  // 'L'
+        str w11, [x9]
+
+        // Final synchronization before jump
         dsb ish
+        isb
 
-        // Serial marker 'F' = increment done
-        mov w11, #0x46  // 'F'
+        // Jump via register
+        br x3
+
+        // This should NEVER execute if branch succeeds
+        mov w11, #0x58  // 'X' = branch failed!
         str w11, [x9]
-
-        b .Lwfi_loop
-
-    .Lno_sync:
-        // Serial marker 'N' = pointer null
-        mov w11, #0x4E  // 'N'
-        str w11, [x9]
-
-    .Lwfi_loop:
+    .Lap_stuck:
         wfi
-        b .Lwfi_loop
-
-    .p2align 3
-    .Lstart_ap_addr:
-        .quad {start_ap}
+        b .Lap_stuck
     ",
-    start_ap = sym start_ap,
+    start = sym start,
 );
 
-/// MINIMAL Rust entry point for Application Processors - just serial writes
-#[unsafe(no_mangle)]
+/// AP initialization - called from shared start() function
+/// This runs in the proven-working Rust environment, avoiding assembly-to-Rust transition issues
 #[inline(never)]
-pub extern "C" fn start_ap(_args_phys: u64) -> ! {
-    // ABSOLUTE MINIMUM - just write to serial, no locals, no function calls
+unsafe fn start_ap_shared(args_phys: usize) -> ! {
+    // Write serial to confirm we're in AP init
     let serial = 0x09000000 as *mut u32;
     unsafe {
-        core::ptr::write_volatile(serial, 0x45); // 'E'
-        core::ptr::write_volatile(serial, 0x45); // 'E' again
-        core::ptr::write_volatile(serial, 0x45); // 'E' third time
+        core::ptr::write_volatile(serial, 0x49); // 'I' = Init
     }
 
-    // Infinite loop
-    loop {
-        unsafe {
-            core::arch::asm!("wfi", options(nostack, nomem));
+    // Increment the shareable sync counter (now that we're in working Rust!)
+    let old = crate::arch::smp_sync::increment_ap_entry();
+
+    unsafe {
+        core::ptr::write_volatile(serial, 0x2B); // '+'
+        // Write count as digit
+        if old < 10 {
+            core::ptr::write_volatile(serial, 0x30 + old);
+        } else {
+            core::ptr::write_volatile(serial, 0x58); // 'X'
         }
     }
+
+    // Convert phys to virt and read AP args
+    let args_ptr = (args_phys + crate::PHYS_OFFSET) as *const KernelArgsAp;
+    let args = unsafe { &*args_ptr };
+    let cpu_id = crate::cpu_set::LogicalCpuId::new(args.cpu_id as u32);
+
+    // Initialize paging (MAIR)
+    paging::init();
+
+    // Initialize per-CPU block and set TPIDR_EL1
+    crate::misc::init(cpu_id);
+
+    warn!("AP {}: Initialized via shared start() path!", cpu_id.get());
+
+    // Signal readiness
+    AP_READY.store(true, Ordering::SeqCst);
+
+    // Wait for BSP to complete initialization
+    while !BSP_READY.load(Ordering::SeqCst) {
+        core::hint::spin_loop();
+    }
+
+    // Call kmain_ap to enter scheduler
+    crate::kmain_ap(cpu_id);
 }
