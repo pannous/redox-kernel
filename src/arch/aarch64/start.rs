@@ -494,21 +494,90 @@ global_asm!("
         mov w11, #0x4B  // 'K'
         str w11, [x9]
 
-        // Branch to start() - page tables map kernel to both identity and high addresses
-        br x8
+        // DIAGNOSTIC: Print full 64-bit address as 16 hex digits
+        // Format: FFFF_FFFF_0000_7530 (example)
+        mov x12, x8
+
+        // Print all 16 nibbles (64 bits)
+        .macro print_nibble shift
+        lsr x13, x12, #\\shift
+        and x13, x13, #0xF
+        add w13, w13, #0x30
+        cmp w13, #0x39
+        ble 2f
+        add w13, w13, #7
+    2:
+        str w13, [x9]
+        .endm
+
+        print_nibble 60
+        print_nibble 56
+        print_nibble 52
+        print_nibble 48
+        mov w11, #0x5F; str w11, [x9]  // '_'
+        print_nibble 44
+        print_nibble 40
+        print_nibble 36
+        print_nibble 32
+        mov w11, #0x5F; str w11, [x9]  // '_'
+        print_nibble 28
+        print_nibble 24
+        print_nibble 20
+        print_nibble 16
+        mov w11, #0x5F; str w11, [x9]  // '_'
+        print_nibble 12
+        print_nibble 8
+        print_nibble 4
+        print_nibble 0
+
+        // Space marker
+        mov w11, #0x20  // ' '
+        str w11, [x9]
+
+        // Flush instruction cache before jumping to virtual address
+        ic iallu
+        dsb ish
+        isb
+
+        // Serial marker 'M' - About to jump after I-cache flush
+        mov w11, #0x4D  // 'M'
+        str w11, [x9]
+
+        // DIAGNOSTIC: Jump to minimal Rust entry
+        mov w11, #0x3E  // '>' = about to jump
+        str w11, [x9]
+
+        br x8  // Jump to ap_entry_minimal
 
         // Should never reach here
-        mov w11, #0x58  // 'X' = branch failed!
+        mov w11, #0x58  // 'X' = jump failed!
         str w11, [x9]
 
     start_addr:
-        .quad {start}
+        .quad {ap_entry}
+
     .Lap_stuck:
         wfi
         b .Lap_stuck
     ",
-    start = sym start,
+    ap_entry = sym ap_entry_minimal,
 );
+
+/// Minimal AP entry - just test if we can reach Rust from assembly
+#[unsafe(no_mangle)]
+#[inline(never)]
+pub unsafe extern "C" fn ap_entry_minimal(args_ptr: *const KernelArgs) -> ! {
+    // FIRST thing - write '!' to serial
+    let serial = 0x09000000 as *mut u32;
+    core::ptr::write_volatile(serial, 0x21); // '!'
+    core::ptr::write_volatile(serial, 0x52); // 'R'
+    core::ptr::write_volatile(serial, 0x55); // 'U'
+    core::ptr::write_volatile(serial, 0x53); // 'S'
+    core::ptr::write_volatile(serial, 0x54); // 'T'
+
+    // Now call the real start function
+    start(args_ptr)
+}
 
 /// AP initialization - called from shared start() function
 /// This runs in the proven-working Rust environment, avoiding assembly-to-Rust transition issues
