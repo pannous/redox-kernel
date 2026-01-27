@@ -150,33 +150,76 @@ unsafe extern "C" fn start(args_ptr: *const KernelArgs) -> ! {
         let bootstrap = {
             let args = args_ptr.read();
 
-            // Set up graphical debug
-            graphical_debug::init(args.env());
-
-            // Get hardware descriptor data
+            // Get hardware descriptor data FIRST (needed for serial init)
             //TODO: use env {DTB,RSDT}_{BASE,SIZE}?
-            debug!("DTB: hwdesc_base=0x{:x}, hwdesc_size=0x{:x}", args.hwdesc_base, args.hwdesc_size);
-            let hwdesc_data = if args.hwdesc_base != 0 {
-                debug!("DTB: Creating hwdesc_data slice");
-                Some(slice::from_raw_parts(
-                    (crate::PHYS_OFFSET + args.hwdesc_base as usize) as *const u8,
-                    args.hwdesc_size as usize,
-                ))
+            let (hwdesc_data, hwdesc_is_dtb) = if args.hwdesc_base != 0 {
+                // Peek at the data to determine if it's DTB or ACPI
+                let header_ptr = (crate::PHYS_OFFSET + args.hwdesc_base as usize) as *const u8;
+                let peek_size = core::cmp::min(args.hwdesc_size as usize, 8);
+                if peek_size >= 8 {
+                    let header_slice = slice::from_raw_parts(header_ptr, peek_size);
+
+                    // Check for DTB magic (0xd00dfeed in big-endian)
+                    let magic = u32::from_be_bytes([header_slice[0], header_slice[1], header_slice[2], header_slice[3]]);
+                    if magic == 0xd00dfeed {
+                        // This is a DTB - read actual size from header
+                        let reported_size = u32::from_be_bytes([header_slice[4], header_slice[5], header_slice[6], header_slice[7]]) as usize;
+                        let dtb_size = core::cmp::max(reported_size + 65536, args.hwdesc_size as usize);
+                        (Some(slice::from_raw_parts(header_ptr, dtb_size)), true)
+                    } else if header_slice.starts_with(b"RSD PTR ") {
+                        // This is ACPI RSDP, not DTB
+                        (None, false)
+                    } else {
+                        // Unknown format, try using it anyway
+                        (Some(slice::from_raw_parts(header_ptr, args.hwdesc_size as usize)), false)
+                    }
+                } else {
+                    // Too small to be a DTB, likely ACPI
+                    (None, false)
+                }
             } else {
-                debug!("DTB: No hwdesc_base, hwdesc_data is None");
-                None
+                (None, false)
             };
 
-            let dtb_res = hwdesc_data
-                .ok_or(fdt::FdtError::BadPtr)
-                .and_then(|data| {
-                    debug!("DTB: Parsing DTB from hwdesc_data, size={}", data.len());
-                    Fdt::new(data)
-                });
+            let dtb_res = if hwdesc_is_dtb {
+                hwdesc_data
+                    .ok_or(fdt::FdtError::BadPtr)
+                    .and_then(|data| Fdt::new(data))
+            } else {
+                // Not DTB data, don't try to parse it
+                Err(fdt::FdtError::BadPtr)
+            };
 
-            // Try to find serial port prior to logging
-            if let Ok(dtb) = &dtb_res {
-                device::serial::init_early(dtb);
+            // Initialize serial FIRST so all debug output is captured
+            // Try DTB-based init, fallback to hardcoded QEMU virt UART if DTB fails
+            match &dtb_res {
+                Ok(dtb) => {
+                    device::serial::init_early(dtb);
+                }
+                Err(_) => {
+                    // DTB failed - use hardcoded QEMU virt PL011 UART at 0x09000000
+                    error!("DTB parsing failed, using hardcoded QEMU virt UART");
+                    unsafe {
+                        use crate::devices::uart_pl011;
+                        let virt = crate::PHYS_OFFSET + 0x09000000;
+                        let mut serial_port = uart_pl011::SerialPort::new(virt, false);
+                        serial_port.init(false);
+                        *crate::device::serial::COM1.lock() =
+                            crate::devices::serial::SerialKind::Pl011(serial_port);
+                    }
+                }
+            }
+
+            // Set up graphical debug AFTER serial
+            graphical_debug::init(args.env());
+
+            // Now all these debug messages go to BOTH serial and framebuffer
+            debug!("DTB: hwdesc_base=0x{:x}, hwdesc_size=0x{:x}", args.hwdesc_base, args.hwdesc_size);
+            if let Some(data) = hwdesc_data {
+                debug!("DTB: Creating hwdesc_data slice");
+                error!("*** DTB: Parsing DTB from hwdesc_data, size={} ***", data.len());
+            } else {
+                debug!("DTB: No hwdesc_base, hwdesc_data is None");
             }
 
             info!("Redox OS starting...");
@@ -239,7 +282,14 @@ unsafe extern "C" fn start(args_ptr: *const KernelArgs) -> ! {
                 Err(err) => {
                     //DEBUG_MARKER.store(999, AtomicOrdering::SeqCst);
                     dtb::init(None);
-                    warn!("failed to parse DTB: {}", err);
+                    // Only show error if we expected DTB but parsing failed
+                    if hwdesc_is_dtb {
+                        error!("*** FAILED to parse DTB: {:?} ***", err);
+                    } else if args.hwdesc_base != 0 {
+                        debug!("Hardware descriptor is not DTB (likely ACPI), using ACPI path");
+                    } else {
+                        debug!("No hardware descriptor provided");
+                    }
 
                     #[cfg(feature = "acpi")]
                     {
@@ -273,13 +323,15 @@ pub struct KernelArgsAp {
 /// Assembly entry point for Application Processors
 ///
 /// Called by PSCI CPU_ON with:
-/// - x0 = context parameter (args_ptr)
-/// - MMU disabled
+/// - x0 = context parameter (args_phys - physical address)
+/// - MMU state undefined (might be on or off)
 /// - EL1
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn kstart_ap(args_ptr: *const KernelArgsAp) -> ! {
+pub unsafe extern "C" fn kstart_ap(args_phys: u64) -> ! {
     unsafe {
         let cpu_id = {
+            // Convert physical address to virtual address
+            let args_ptr = (args_phys as usize + crate::PHYS_OFFSET) as *const KernelArgsAp;
             let args = &*args_ptr;
 
             let cpu_id = crate::cpu_set::LogicalCpuId::new(args.cpu_id as u32);
