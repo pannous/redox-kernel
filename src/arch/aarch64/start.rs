@@ -6,7 +6,7 @@ use core::{
     arch::global_asm,
     cell::SyncUnsafeCell,
     slice,
-    sync::atomic::{AtomicBool, Ordering},
+    sync::atomic::{AtomicBool, AtomicU32, Ordering},
 };
 
 use fdt::Fdt;
@@ -25,6 +25,9 @@ static mut DATA_TEST_NONZERO: usize = 0xFFFF_FFFF_FFFF_FFFF;
 
 pub static AP_READY: AtomicBool = AtomicBool::new(false);
 static BSP_READY: AtomicBool = AtomicBool::new(false);
+
+/// Counter to track how many APs actually entered kstart_ap
+pub static AP_ENTRY_COUNT: AtomicU32 = AtomicU32::new(0);
 
 /// Enumerate CPU cores from device tree
 unsafe fn enumerate_cpus_from_dtb(dtb: &Fdt) -> u32 {
@@ -328,6 +331,9 @@ pub struct KernelArgsAp {
 /// - EL1
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn kstart_ap(args_phys: u64) -> ! {
+    // Increment entry counter FIRST - before ANY other operations
+    AP_ENTRY_COUNT.fetch_add(1, Ordering::SeqCst);
+
     unsafe {
         let cpu_id = {
             // Convert physical address to virtual address
@@ -335,6 +341,10 @@ pub unsafe extern "C" fn kstart_ap(args_phys: u64) -> ! {
             let args = &*args_ptr;
 
             let cpu_id = crate::cpu_set::LogicalCpuId::new(args.cpu_id as u32);
+            let stack_end = args.stack_end;
+            let page_table = args.page_table;
+
+            warn!("AP {}: kstart_ap entered (total entries={})", cpu_id.get(), AP_ENTRY_COUNT.load(Ordering::SeqCst));
 
             // Set up exception vectors (VBAR_EL1)
             core::arch::asm!(
@@ -343,14 +353,20 @@ pub unsafe extern "C" fn kstart_ap(args_phys: u64) -> ! {
                 out("x9") _,
             );
 
+            warn!("AP {}: VBAR set", cpu_id.get());
+
             // Set up stack pointer from args
             core::arch::asm!(
                 "mov sp, {}",
-                in(reg) args.stack_end,
+                in(reg) stack_end,
             );
 
+            warn!("AP {}: Stack set to 0x{:x}", cpu_id.get(), stack_end);
+
             // Configure page tables for this CPU (TTBR1_EL1)
-            crate::device::cpu::registers::control_regs::ttbr1_el1_write(args.page_table);
+            crate::device::cpu::registers::control_regs::ttbr1_el1_write(page_table);
+
+            warn!("AP {}: TTBR1 set to 0x{:x}", cpu_id.get(), page_table);
 
             // Flush TLB
             core::arch::asm!(
@@ -360,11 +376,17 @@ pub unsafe extern "C" fn kstart_ap(args_phys: u64) -> ! {
                 "isb",
             );
 
+            warn!("AP {}: TLB flushed", cpu_id.get());
+
             // Initialize paging (MAIR)
             paging::init();
 
+            warn!("AP {}: Paging initialized", cpu_id.get());
+
             // Initialize per-CPU block and set TPIDR_EL1
             crate::misc::init(cpu_id);
+
+            warn!("AP {}: Percpu block initialized", cpu_id.get());
 
             // Note: GIC CPU interface initialization happens automatically
             // on GICv2, the CPU interface is banked per-CPU and accessed at
@@ -373,6 +395,8 @@ pub unsafe extern "C" fn kstart_ap(args_phys: u64) -> ! {
 
             // Signal readiness
             AP_READY.store(true, Ordering::SeqCst);
+
+            warn!("AP {}: Signaled readiness", cpu_id.get());
 
             cpu_id
         };

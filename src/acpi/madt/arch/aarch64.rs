@@ -221,26 +221,43 @@ unsafe fn start_secondary_cpus(giccs: &[&super::MadtGicc]) {
 
         trace!("AP {} stack: 0x{:x} - 0x{:x}", ap_count, stack_start, stack_end);
 
-        // Create KernelArgsAp structure
-        let args = crate::arch::start::KernelArgsAp {
-            cpu_id: ap_count + 1,  // CPUs numbered 1, 2, 3...
-            page_table: page_table_phys,
-            stack_start: stack_start as u64,
-            stack_end: stack_end as u64,
+        // Allocate KernelArgsAp in physical frame (not stack) for AP to access before MMU setup
+        let args_frame = allocate_p2frame(1)
+            .expect("Failed to allocate args frame for AP");
+        let args_phys = args_frame.base().data() as u64;
+        let args_virt = (args_phys as usize + crate::PHYS_OFFSET) as *mut crate::arch::start::KernelArgsAp;
+
+        // Write args to allocated frame
+        unsafe {
+            args_virt.write(crate::arch::start::KernelArgsAp {
+                cpu_id: ap_count + 1,  // CPUs numbered 1, 2, 3...
+                page_table: page_table_phys,
+                stack_start: stack_start as u64,
+                stack_end: stack_end as u64,
+            });
+        }
+
+        // Get entry point address (PHYSICAL not virtual!)
+        let entry_point_virt = crate::arch::start::kstart_ap as *const () as u64;
+
+        // Kernel text is identity-mapped minus PHYS_OFFSET
+        // For aarch64, PHYS_OFFSET = 0xFFFF_8000_0000_0000
+        // So virt addresses in range [PHYS_OFFSET, PHYS_OFFSET + X] map to phys [0, X]
+        let entry_point_phys = if entry_point_virt >= crate::PHYS_OFFSET as u64 {
+            entry_point_virt - crate::PHYS_OFFSET as u64
+        } else {
+            // Already physical or in low memory
+            entry_point_virt
         };
 
-        // Get entry point address
-        let entry_point = crate::arch::start::kstart_ap as *const () as u64;
-        let args_ptr = &args as *const _ as u64;
-
-        trace!("PSCI CPU_ON: mpidr=0x{:x}, entry=0x{:x}, context=0x{:x}",
-              mpidr, entry_point, args_ptr);
+        info!("PSCI CPU_ON: mpidr=0x{:x}, virt=0x{:x}, phys=0x{:x}, context=0x{:x}",
+              mpidr, entry_point_virt, entry_point_phys, args_phys);
 
         // Reset AP_READY flag
         crate::arch::start::AP_READY.store(false, Ordering::SeqCst);
 
-        // Call PSCI CPU_ON
-        let result = unsafe { psci_call(PSCI_CPU_ON_64, mpidr, entry_point, args_ptr) };
+        // Call PSCI CPU_ON - pass PHYSICAL addresses
+        let result = unsafe { psci_call(PSCI_CPU_ON_64, mpidr, entry_point_phys, args_phys) };
 
         if result == 0 {
             debug!("PSCI CPU_ON succeeded for AP {}", ap_count);
@@ -265,6 +282,7 @@ unsafe fn start_secondary_cpus(giccs: &[&super::MadtGicc]) {
     }
 
     info!("Started {} secondary CPU(s)", ap_count);
+    info!("AP_ENTRY_COUNT={}", crate::arch::start::AP_ENTRY_COUNT.load(core::sync::atomic::Ordering::SeqCst));
 }
 
 /// Start secondary CPUs from device tree (without ACPI MADT)
@@ -315,26 +333,43 @@ unsafe fn start_secondary_cpus_from_dtb(total_cpus: usize) {
 
         trace!("AP {} stack: 0x{:x} - 0x{:x}", ap_count, stack_start, stack_end);
 
-        // Create KernelArgsAp structure
-        let args = crate::arch::start::KernelArgsAp {
-            cpu_id: cpu_id as u64,  // Use actual CPU ID
-            page_table: page_table_phys,
-            stack_start: stack_start as u64,
-            stack_end: stack_end as u64,
+        // Allocate KernelArgsAp in physical frame (not stack) for AP to access before MMU setup
+        let args_frame = allocate_p2frame(1)
+            .expect("Failed to allocate args frame for AP");
+        let args_phys = args_frame.base().data() as u64;
+        let args_virt = (args_phys as usize + crate::PHYS_OFFSET) as *mut crate::arch::start::KernelArgsAp;
+
+        // Write args to allocated frame
+        unsafe {
+            args_virt.write(crate::arch::start::KernelArgsAp {
+                cpu_id: cpu_id as u64,  // Use actual CPU ID
+                page_table: page_table_phys,
+                stack_start: stack_start as u64,
+                stack_end: stack_end as u64,
+            });
+        }
+
+        // Get entry point address (PHYSICAL not virtual!)
+        let entry_point_virt = crate::arch::start::kstart_ap as *const () as u64;
+
+        // Kernel text is identity-mapped minus PHYS_OFFSET
+        // For aarch64, PHYS_OFFSET = 0xFFFF_8000_0000_0000
+        // So virt addresses in range [PHYS_OFFSET, PHYS_OFFSET + X] map to phys [0, X]
+        let entry_point_phys = if entry_point_virt >= crate::PHYS_OFFSET as u64 {
+            entry_point_virt - crate::PHYS_OFFSET as u64
+        } else {
+            // Already physical or in low memory
+            entry_point_virt
         };
 
-        // Get entry point address
-        let entry_point = crate::arch::start::kstart_ap as *const () as u64;
-        let args_ptr = &args as *const _ as u64;
-
-        trace!("PSCI CPU_ON: mpidr=0x{:x}, entry=0x{:x}, context=0x{:x}",
-              mpidr, entry_point, args_ptr);
+        info!("PSCI CPU_ON: mpidr=0x{:x}, virt=0x{:x}, phys=0x{:x}, context=0x{:x}",
+              mpidr, entry_point_virt, entry_point_phys, args_phys);
 
         // Reset AP_READY flag
         crate::arch::start::AP_READY.store(false, Ordering::SeqCst);
 
-        // Call PSCI CPU_ON
-        let result = unsafe { psci_call(PSCI_CPU_ON_64, mpidr, entry_point, args_ptr) };
+        // Call PSCI CPU_ON - pass PHYSICAL addresses
+        let result = unsafe { psci_call(PSCI_CPU_ON_64, mpidr, entry_point_phys, args_phys) };
 
         if result == 0 {
             debug!("PSCI CPU_ON succeeded for AP {}", ap_count);
