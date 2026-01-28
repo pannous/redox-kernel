@@ -424,17 +424,8 @@ global_asm!("
         mov w11, #0x43  // 'C'
         str w11, [x9]
 
-        // Serial marker 'T' - About to load TCR
-        mov w11, #0x54  // 'T'
-        str w11, [x9]
-
         // Load TCR_EL1 and MAIR_EL1 values from BSP (offsets 48 and 56)
         ldr x3, [x0, #48]        // x3 = BSP's TCR_EL1
-
-        // Serial marker 'U' - TCR loaded
-        mov w11, #0x55  // 'U'
-        str w11, [x9]
-
         msr tcr_el1, x3
         isb
 
@@ -442,104 +433,54 @@ global_asm!("
         msr mair_el1, x3
         isb
 
-        // Serial marker 'M' - MAIR set
-        mov w11, #0x4D  // 'M'
-        str w11, [x9]
-
-        // Serial marker '1' - After M
-        mov w11, #0x31  // '1'
-        str w11, [x9]
-
-        // Serial marker '2' - Continue
-        mov w11, #0x32  // '2'
-        str w11, [x9]
-
         // Flush TLB for both page tables
         dsb sy
-
-        // Serial marker '3' - After DSB
-        mov w11, #0x33  // '3'
-        str w11, [x9]
-
         tlbi vmalle1              // Invalidate TLB entries
-
-        // Serial marker '4' - After TLBI
-        mov w11, #0x34  // '4'
-        str w11, [x9]
-
         dsb sy
         isb
 
-        // Serial marker '5' - After barriers
-        mov w11, #0x35  // '5'
-        str w11, [x9]
+        // NOTE: Skipping ic iallu - causes hang on QEMU/HVF for secondary CPUs
 
-        // TEST: Put marker before IC IALLU
-        mov w11, #0x36  // '6'
-        str w11, [x9]
+        // DON'T enable MMU yet - need to access args structure first!
+        // The args structure is at a physical address that may not be identity-mapped
+        // CRITICAL: Load all data from args before enabling MMU
 
-        // SKIP ic iallu - it causes hang!
-        // ic iallu
-
-        // Marker - skipped IC IALLU
-        mov w11, #0x37  // '7'
-        str w11, [x9]
-
-        dsb sy
-
-        // Marker after DSB
-        mov w11, #0x38  // '8'
-        str w11, [x9]
-
-        isb
-
-        // Marker after ISB
-        mov w11, #0x39  // '9'
-        str w11, [x9]
-
-        // Serial marker 'E' - All barriers complete
-        mov w11, #0x45  // 'E'
-        str w11, [x9]
-
-        // Marker F - Continuing
-        mov w11, #0x46  // 'F'
-        str w11, [x9]
-
-        // Load stack_end (offset 24) - use PHYSICAL address
+        // Load stack_end (offset 24) - PHYSICAL address, MMU still OFF
         ldr x2, [x10, #24]
         mov sp, x2
 
-        // Serial marker 'S' - Stack ready (physical)
-        mov w11, #0x53  // 'S'
-        str w11, [x9]
-
-        // Pass args_phys directly to Rust (no conversion)
+        // Pass args_phys to Rust
         mov x0, x10
 
         // Clear link register
         mov lr, #0
 
-        // Serial marker 'J' - About to jump to Rust (physical)
-        mov w11, #0x4A  // 'J'
+        // NOW enable MMU before jumping to virtual space
+        // Read current SCTLR_EL1
+        mrs x3, sctlr_el1
+
+        // Set M bit (bit 0) to enable MMU, C and I bits for caches
+        orr x3, x3, #(1 << 0)   // Enable MMU
+        orr x3, x3, #(1 << 2)   // Enable D-cache
+        orr x3, x3, #(1 << 12)  // Enable I-cache
+
+        // Write SCTLR_EL1 to enable MMU
+        msr sctlr_el1, x3
+        isb                      // CRITICAL: ISB after SCTLR change
+
+        // Serial marker 'E' - MMU enabled
+        mov w11, #0x45  // 'E'
         str w11, [x9]
 
-        // Load PHYSICAL address of Rust entry point
-        // We're executing from physical space, so use PC-relative addressing
-        adr x8, ap_entry_minimal
+        // Load VIRTUAL address (KERNEL_OFFSET) of Rust entry point
+        // MMU is now enabled, jump to TTBR1 (kernel virtual) space
+        adr x8, rust_entry_addr
+        ldr x8, [x8]              // Load KERNEL_OFFSET address from rust_entry_addr
 
-        // Serial marker '>' - Jumping to Rust
-        mov w11, #0x3E  // '>'
-        str w11, [x9]
-
-        // Jump to Rust code (still at physical address)
+        // Jump to virtual (KERNEL_OFFSET) space
         br x8
 
-        // CRITICAL: Add ISB after jump fails (shouldn't reach here)
-        isb
-
-        // Should never reach here - but add marker just in case
-        mov w11, #0x58  // 'X' = returned from jump?!
-        str w11, [x9]
+        // Should never return from Rust entry
         b .Lap_stuck
 
     rust_entry_addr:
