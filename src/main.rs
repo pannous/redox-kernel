@@ -191,6 +191,8 @@ fn kmain(bootstrap: Bootstrap) -> ! {
 
     BOOTSTRAP.call_once(|| bootstrap);
 
+    debug!("BSP: About to spawn bootstrap context");
+
     profiling::ready_for_profiling();
 
     let owner = None; // kmain not owned by any fd
@@ -211,12 +213,18 @@ fn kmain(bootstrap: Bootstrap) -> ! {
         }
     }
 
+    debug!("BSP: Entering scheduler (run_userspace)");
+
     run_userspace(&mut token)
 }
 
 /// This is the main kernel entry point for secondary CPUs
 fn kmain_ap(cpu_id: crate::cpu_set::LogicalCpuId) -> ! {
     let mut token = unsafe { CleanLockToken::new() };
+
+    // Initialize the idle context for this CPU (CRITICAL!)
+    // Each CPU needs its own idle context before entering the scheduler
+    context::init(&mut token);
 
     #[cfg(feature = "profiling")]
     profiling::maybe_run_profiling_helper_forever(cpu_id);
