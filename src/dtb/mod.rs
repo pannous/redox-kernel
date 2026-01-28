@@ -15,6 +15,17 @@ use spin::once::Once;
 /// Represents the in-memory DTB (DeviceTree) binary.
 pub static DTB_BINARY: Once<&'static [u8]> = Once::new();
 
+/// Get the parsed FDT if available
+pub fn fdt() -> Option<Fdt<'static>> {
+    DTB_BINARY.get().and_then(|binary| {
+        if binary.is_empty() {
+            None
+        } else {
+            Fdt::new(binary).ok()
+        }
+    })
+}
+
 /// Initializes the DTB from the provided base address and size.
 ///
 /// # Safety

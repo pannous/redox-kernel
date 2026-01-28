@@ -168,6 +168,12 @@ impl InterruptController for GenericInterruptController {
             self.gic_dist_if.write(GICD_SGIR, sgir_value);
         }
     }
+
+    unsafe fn init_cpu_if(&mut self) {
+        // For GICv2, the CPU interface may need per-CPU initialization
+        // For now, just a no-op as it's typically initialized once
+        // GICv3 overrides this properly
+    }
 }
 
 #[derive(Debug, Default, Clone, Copy)]

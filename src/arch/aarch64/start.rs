@@ -338,7 +338,14 @@ unsafe extern "C" fn start(args_ptr: *const KernelArgs) -> ! {
                 }
                 Err(err) => {
                     //DEBUG_MARKER.store(999, AtomicOrdering::SeqCst);
-                    dtb::init(None);
+                    // Store DTB binary even if using ACPI, for GIC version detection
+                    if let Some(data) = hwdesc_data {
+                        info!("Storing FDT binary (size={}) for later use", data.len());
+                        dtb::init(Some((data.as_ptr() as usize, data.len())));
+                    } else {
+                        warn!("No hwdesc_data available to store as FDT");
+                        dtb::init(None);
+                    }
                     // Only show error if we expected DTB but parsing failed
                     if hwdesc_is_dtb {
                         error!("*** FAILED to parse DTB: {:?} ***", err);
@@ -536,6 +543,18 @@ unsafe fn start_ap_shared(args_phys: usize) -> ! {
 
     // Convert phys to virt and read AP args
     let args_ptr = (args_phys + crate::PHYS_OFFSET) as *const KernelArgsAp;
+
+    // CRITICAL: Invalidate cache before reading to get fresh data from memory
+    unsafe {
+        core::arch::asm!(
+            "dc ivac, {addr}",  // Invalidate data cache by VA to PoC
+            "dsb sy",           // Data Synchronization Barrier
+            "isb",              // Instruction Synchronization Barrier
+            addr = in(reg) args_ptr,
+            options(nostack)
+        );
+    }
+
     let args = unsafe { &*args_ptr };
     let cpu_id = crate::cpu_set::LogicalCpuId::new(args.cpu_id as u32);
 
@@ -559,6 +578,27 @@ unsafe fn start_ap_shared(args_phys: usize) -> ! {
 
     unsafe {
         core::ptr::write_volatile(serial, 0x21); // '!' = BSP ready, proceeding
+    }
+
+    // Initialize GIC CPU interface for this AP
+    // Each CPU must initialize its own CPU interface to receive interrupts
+    unsafe {
+        // Get the GIC from IRQ_CHIP and initialize this CPU's interface
+        use crate::dtb::irqchip::IRQ_CHIP;
+        use core::sync::atomic::Ordering;
+        let root_ic_idx = crate::arch::device::ROOT_IC_IDX.load(Ordering::Relaxed);
+        let ic = &mut IRQ_CHIP.irq_chip_list.chips[root_ic_idx].ic;
+
+        // Initialize CPU interface - this is safe to call on each CPU
+        // For GICv3, this sets up ICC_* system registers
+        ic.init_cpu_if();
+        debug!("AP {}: GIC CPU interface initialized", cpu_id.get());
+    }
+
+    // Initialize local timer for this AP
+    // Each CPU has its own timer control registers that must be enabled
+    unsafe {
+        crate::arch::device::generic_timer::init_local_timer();
     }
 
     // Call kmain_ap to enter scheduler

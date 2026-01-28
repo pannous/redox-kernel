@@ -39,6 +39,12 @@ pub trait InterruptController: InterruptHandler {
     fn send_sgi(&mut self, _kind: crate::ipi::IpiKind, _target: crate::ipi::IpiTarget) {
         // Default no-op for interrupt controllers that don't support SGI
     }
+
+    #[cfg(target_arch = "aarch64")]
+    unsafe fn init_cpu_if(&mut self) {
+        // Default no-op - only GIC implementations need to override this
+        // GICv3 needs to initialize ICC_* system registers on each CPU
+    }
 }
 
 pub struct IrqConnection {

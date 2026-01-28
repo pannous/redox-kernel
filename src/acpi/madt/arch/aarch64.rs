@@ -7,9 +7,117 @@ use crate::{
         gic::{GenericInterruptController, GicCpuIf, GicDistIf},
         gicv3::{GicV3, GicV3CpuIf},
     },
-    dtb::irqchip::{IrqChipItem, IRQ_CHIP},
+    dtb::{irqchip::{IrqChipItem, IRQ_CHIP}, get_mmio_address},
     memory::{map_device_memory, PhysicalAddress, PAGE_SIZE, allocate_p2frame, KernelMapper},
 };
+
+/// Detect GIC version by reading hardware registers
+/// Returns the GIC version (2 or 3) if detectable, None otherwise
+unsafe fn detect_gic_version_from_hardware(gic_dist: &GicDistIf) -> Option<u8> {
+    use core::ptr::read_volatile;
+
+    // GICD_PIDR2 register at offset 0xFE8 contains architecture version
+    // Bits [7:4] indicate the GIC architecture version
+    const GICD_PIDR2: u32 = 0xFE8;
+
+    let pidr2_addr = (gic_dist.address + GICD_PIDR2 as usize) as *const u32;
+    let pidr2 = unsafe { read_volatile(pidr2_addr) };
+
+    // Extract architecture version from bits [7:4]
+    let arch_rev = ((pidr2 >> 4) & 0xF) as u8;
+
+    // GICv2 = 0x1 or 0x2, GICv3/v4 = 0x3
+    match arch_rev {
+        0x1 | 0x2 => {
+            info!("Hardware GIC PIDR2=0x{:x}, arch_rev={} (GICv2)", pidr2, arch_rev);
+            Some(2)
+        }
+        0x3 => {
+            info!("Hardware GIC PIDR2=0x{:x}, arch_rev={} (GICv3)", pidr2, arch_rev);
+            Some(3)
+        }
+        _ => {
+            warn!("Unknown GIC arch_rev={} from PIDR2=0x{:x}", arch_rev, pidr2);
+            None
+        }
+    }
+}
+
+/// Detect GIC version from device tree
+/// Returns the GIC version (2 or 3) if found, None otherwise
+unsafe fn detect_gic_version_from_fdt() -> Option<u8> {
+    info!("Detecting GIC version from FDT");
+    let fdt = crate::dtb::fdt();
+    if fdt.is_none() {
+        warn!("FDT not available for GIC version detection");
+        return None;
+    }
+    let fdt = fdt.unwrap();
+
+    // Check for GICv3
+    if fdt.find_compatible(&["arm,gic-v3"]).is_some() {
+        info!("FDT indicates GICv3");
+        return Some(3);
+    }
+
+    // Check for GICv2
+    if fdt.find_compatible(&["arm,cortex-a15-gic", "arm,gic-400"]).is_some() {
+        info!("FDT indicates GICv2");
+        return Some(2);
+    }
+
+    warn!("No GIC found in FDT");
+    None
+}
+
+/// Extract GICv3 redistributor addresses from device tree
+/// Returns a Vec of (physical_address, size) tuples
+unsafe fn get_gicv3_redistributors_from_fdt() -> Vec<(usize, usize)> {
+    use fdt::node::NodeProperty;
+
+    warn!("get_gicv3_redistributors_from_fdt() called");
+    let mut gicrs = Vec::new();
+
+    // Get the FDT from dtb module
+    let fdt_opt = crate::dtb::fdt();
+    let Some(fdt) = fdt_opt else {
+        warn!("No FDT available for redistributor lookup");
+        return gicrs;
+    };
+
+    // Look for GICv3 node
+    let Some(node) = fdt.find_compatible(&["arm,gic-v3"]) else {
+        warn!("No GICv3 node found in device tree");
+        return gicrs;
+    };
+
+    // Get number of redistributor regions
+    let gicr_count = node
+        .property("#redistributor-regions")
+        .and_then(NodeProperty::as_usize)
+        .unwrap_or(1);
+
+    info!("Device tree indicates {} redistributor region(s)", gicr_count);
+
+    // Parse reg property - first entry is GICD, rest are GICRs
+    let mut chunks = node.reg().unwrap();
+
+    // Skip first entry (GICD)
+    let _ = chunks.next();
+
+    // Read redistributor entries
+    for _ in 0..gicr_count {
+        if let Some(gicr) = chunks.next() {
+            if let Some(addr) = get_mmio_address(&fdt, &node, &gicr) {
+                let size = gicr.size.unwrap_or(0x20000);  // Default GICR size
+                gicrs.push((addr, size));
+                debug!("Found redistributor at phys 0x{:x}, size 0x{:x}", addr, size);
+            }
+        }
+    }
+
+    gicrs
+}
 
 /// Initialize multi-core support from device tree (when ACPI MADT is not available)
 pub(super) fn init_from_dtb() {
@@ -74,9 +182,19 @@ pub(super) fn init(madt: Madt) {
         gic_dist_if.init(virt.data());
     };
     debug!("{:#x?}", gic_dist_if);
-    info!("GIC distributor initialized, version {}", gicd.gic_version);
+    info!("GIC distributor initialized, ACPI reports version {}", gicd.gic_version);
 
-    match gicd.gic_version {
+    // WORKAROUND: QEMU's ACPI tables may incorrectly report GICv2 even when using GICv3
+    // Query the GIC hardware directly to get the real version
+    let hw_version = unsafe { detect_gic_version_from_hardware(&gic_dist_if) };
+    let actual_gic_version = hw_version.unwrap_or(gicd.gic_version);
+
+    if actual_gic_version != gicd.gic_version {
+        warn!("ACPI reports GICv{} but hardware is GICv{} - using hardware version",
+              gicd.gic_version, actual_gic_version);
+    }
+
+    match actual_gic_version {
         1 | 2 => {
             // GICv2: Initialize all CPU interfaces
             let mut cpu_idx = 0;
@@ -110,6 +228,19 @@ pub(super) fn init(madt: Madt) {
             info!("Initialized {} GICv2 CPU interfaces", cpu_idx);
         }
         3 => {
+            info!("GICv3 detected - looking up redistributors from FDT");
+            // GICv3: Get redistributor addresses from device tree
+            // Even when using ACPI, the FDT contains GIC topology info
+            let gicrs = unsafe {
+                get_gicv3_redistributors_from_fdt()
+            };
+
+            if gicrs.is_empty() {
+                warn!("No GICv3 redistributors found - PPIs will not work!");
+            } else {
+                info!("Found {} GICv3 redistributor(s)", gicrs.len());
+            }
+
             // GICv3: Initialize all CPU interfaces
             let mut cpu_idx = 0;
             for _gicc in &giccs {
@@ -123,8 +254,7 @@ pub(super) fn init(madt: Madt) {
                 let gic = GicV3 {
                     gic_dist_if,  // Copy of distributor interface
                     gic_cpu_if,
-                    //TODO: get GICRs from MADT
-                    gicrs: Vec::new(),
+                    gicrs: gicrs.clone(),  // Share redistributor addresses
                     irq_range: (0, 0),
                 };
                 let chip = IrqChipItem {
@@ -396,6 +526,17 @@ unsafe fn start_secondary_cpus_from_dtb(total_cpus: usize) {
                 tcr_el1,   // BSP's TCR value
                 mair_el1,  // BSP's MAIR value
             });
+
+            // CRITICAL: Ensure args are visible to other CPUs
+            // Clean the data cache for this memory region to PoC (Point of Coherency)
+            // so the AP can see the data we just wrote
+            core::arch::asm!(
+                "dc cvac, {addr}",  // Clean data cache by VA to PoC
+                "dsb sy",           // Data Synchronization Barrier
+                "isb",              // Instruction Synchronization Barrier
+                addr = in(reg) args_virt,
+                options(nostack)
+            );
         }
 
         // Get entry point address (PHYSICAL not virtual!)

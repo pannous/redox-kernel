@@ -126,6 +126,14 @@ impl GenericTimer {
 
 impl InterruptHandler for GenericTimer {
     fn irq_handler(&mut self, irq: u32, token: &mut CleanLockToken) {
+        use core::sync::atomic::{AtomicU64, Ordering};
+        static TIMER_INT_COUNT: AtomicU64 = AtomicU64::new(0);
+
+        let count = TIMER_INT_COUNT.fetch_add(1, Ordering::Relaxed);
+        if count % 100 == 0 {
+            info!("Timer interrupt #{}", count);
+        }
+
         self.clear_irq();
         {
             *time::OFFSET.lock() += self.clk_freq as u128;
@@ -139,4 +147,48 @@ impl InterruptHandler for GenericTimer {
         }
         self.reload_count();
     }
+}
+
+/// Initialize the local timer for this CPU
+/// This should be called on each AP after the BSP has set up the IRQ handler
+/// Each CPU has its own timer control registers that need to be enabled
+pub unsafe fn init_local_timer() {
+    use crate::device::cpu::registers::control_regs;
+
+    // Detect if we should use virtual or physical timer
+    let use_virtual_timer = unsafe { !control_regs::vhe_present() };
+
+    // Get the clock frequency (should be same on all CPUs)
+    let clk_freq = unsafe { control_regs::cntfrq_el0() };
+    let reload_count = clk_freq / 100;  // 100Hz = 10ms ticks
+
+    debug!("CPU: Initializing local timer (freq={}, reload={})", clk_freq, reload_count);
+
+    // Enable the timer interrupt in the GIC for this CPU
+    // The timer uses a PPI (Private Peripheral Interrupt), so each CPU needs
+    // to enable it in their own GIC
+    // Timer IRQ is typically 27 for the virtual timer
+    unsafe {
+        // Use the same virq that was set up during BSP init
+        // For now, hardcode to 27 which is the virtual timer PPI
+        // TODO: Store virq globally during BSP init and reuse here
+        warn!("Enabling timer IRQ 27 in GIC for this CPU");
+        crate::dtb::irqchip::IRQ_CHIP.irq_enable(27);
+        warn!("Timer IRQ 27 enabled");
+    }
+
+    // Set the timer value and enable it with interrupt unmasked
+    if use_virtual_timer {
+        unsafe { control_regs::vtmr_tval_write(reload_count) };
+        // Enable timer and unmask interrupt (ENABLE=1, IMASK=0)
+        let ctrl = TimerCtrlFlags::ENABLE;  // IMASK not set = interrupt enabled
+        unsafe { control_regs::vtmr_ctrl_write(ctrl.bits()) };
+    } else {
+        unsafe { control_regs::ptmr_tval_write(reload_count) };
+        // Enable timer and unmask interrupt (ENABLE=1, IMASK=0)
+        let ctrl = TimerCtrlFlags::ENABLE;  // IMASK not set = interrupt enabled
+        unsafe { control_regs::ptmr_ctrl_write(ctrl.bits()) };
+    }
+
+    info!("Local timer initialized and enabled with interrupt unmasked");
 }
