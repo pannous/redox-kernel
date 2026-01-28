@@ -273,18 +273,27 @@ unsafe extern "C" fn fp_load(float_regs: &mut FloatRegisters) {
 }
 
 pub unsafe fn switch_to(prev: &mut super::Context, next: &mut super::Context) {
+    warn!("arch::switch_to: entered for prev={} next={}", prev.debug_id, next.debug_id);
     unsafe {
+        warn!("arch::switch_to: saving FP");
         fp_save(&mut *(prev.kfx.as_mut_ptr() as *mut FloatRegisters));
+        warn!("arch::switch_to: FP saved");
 
         prev.arch.fx_loadable = true;
 
         if next.arch.fx_loadable {
+            warn!("arch::switch_to: loading next FP");
             fp_load(&mut *(next.kfx.as_mut_ptr() as *mut FloatRegisters));
+            warn!("arch::switch_to: next FP loaded");
+        } else {
+            warn!("arch::switch_to: next FP not loadable, skipping");
         }
 
+        warn!("arch::switch_to: setting new_addrsp_tmp");
         PercpuBlock::current()
             .new_addrsp_tmp
             .set(next.addr_space.clone());
+        warn!("arch::switch_to: calling switch_to_inner");
 
         switch_to_inner(&mut prev.arch, &mut next.arch)
     }

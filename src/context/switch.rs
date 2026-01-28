@@ -107,18 +107,33 @@ pub fn tick(token: &mut CleanLockToken) {
 /// # Safety
 /// This function involves unsafe operations such as resetting state and releasing locks.
 pub unsafe extern "C" fn switch_finish_hook() {
+    warn!("switch_finish_hook: entered");
     unsafe {
+        warn!("switch_finish_hook: about to take switch_result");
         match PercpuBlock::current().switch_internals.switch_result.take() {
             Some(switch_result) => {
+                warn!("switch_finish_hook: got switch_result, dropping");
                 drop(switch_result);
+                warn!("switch_finish_hook: dropped switch_result");
             }
             _ => {
+                warn!("switch_finish_hook: NO switch_result, calling emergency_reset");
                 // TODO: unreachable_unchecked()?
                 crate::arch::stop::emergency_reset();
             }
         }
+        warn!("switch_finish_hook: releasing CONTEXT_SWITCH_LOCK");
         arch::CONTEXT_SWITCH_LOCK.store(false, Ordering::SeqCst);
+        warn!("switch_finish_hook: calling switch_arch_hook");
         crate::percpu::switch_arch_hook();
+
+        // CRITICAL: Enable interrupts after context switch
+        // The new context inherits the DAIF register from the previous context,
+        // which had interrupts disabled in the scheduler loop. We must re-enable
+        // interrupts here so the new context can receive timer interrupts.
+        warn!("switch_finish_hook: enabling interrupts");
+        crate::interrupt::enable_and_nop();
+        warn!("switch_finish_hook: interrupts enabled, returning");
     }
 }
 
@@ -142,18 +157,25 @@ pub enum SwitchResult {
 /// - `SwitchResult::AllContextsIdle`: Indicates all contexts are idle, and the CPU will switch
 ///   to an idle context.
 pub fn switch(token: &mut CleanLockToken) -> SwitchResult {
+    warn!("context::switch: entered on CPU {}", crate::cpu_id().get());
     let percpu = PercpuBlock::current();
+    warn!("context::switch: got percpu");
     cpu_stats::add_context_switch();
+    warn!("context::switch: added cpu stats");
     percpu.stats.add_context_switch_local();
+    warn!("context::switch: added percpu stats");
 
     let cpu_id = crate::cpu_id();
+    warn!("context::switch: got cpu_id={}", cpu_id.get());
 
     //set PIT Interrupt counter to 0, giving each process same amount of PIT ticks
     percpu.switch_internals.pit_ticks.set(0);
+    warn!("context::switch: reset pit_ticks");
 
     // Acquire the global lock to ensure exclusive access during context switch and avoid
     // issues that would be caused by the unsafe operations below
     // TODO: Better memory orderings?
+    warn!("context::switch: about to acquire CONTEXT_SWITCH_LOCK");
     {
         use core::sync::atomic::AtomicU64;
         static SPIN_COUNTER: AtomicU64 = AtomicU64::new(0);
@@ -164,37 +186,50 @@ pub fn switch(token: &mut CleanLockToken) -> SwitchResult {
         {
             local_spins += 1;
             let total = SPIN_COUNTER.fetch_add(1, Ordering::Relaxed);
-            if total % 10_000_000 == 0 {
-                println!("CS_LOCK spin: total={} local={}", total, local_spins);
+            if total % 1_000_000 == 0 {  // Log more frequently for debugging
+                warn!("CS_LOCK spin: total={} local={} on CPU {}", total, local_spins, crate::cpu_id().get());
             }
             hint::spin_loop();
             percpu.maybe_handle_tlb_shootdown();
         }
     }
+    warn!("context::switch: acquired CONTEXT_SWITCH_LOCK");
 
     let cpu_id = crate::cpu_id();
+    warn!("context::switch: got cpu_id (2nd time)");
 
     let mut switch_context_opt = None;
     {
+        warn!("context::switch: about to call contexts()");
         let contexts = contexts(token.token());
+        warn!("context::switch: got contexts");
 
         // Lock the previous context.
+        warn!("context::switch: about to get current context");
         let prev_context_lock = crate::context::current();
+        warn!("context::switch: about to lock current context with write_arc()");
         // We are careful not to lock this context twice
         let prev_context_guard = unsafe { prev_context_lock.write_arc() };
+        warn!("context::switch: locked current context");
 
+        warn!("context::switch: checking is_preemptable()");
         if !prev_context_guard.is_preemptable() {
+            warn!("context::switch: not preemptable, returning AllContextsIdle");
             // Release the lock before returning
             arch::CONTEXT_SWITCH_LOCK.store(false, Ordering::SeqCst);
             return SwitchResult::AllContextsIdle;
         }
+        warn!("context::switch: is preemptable");
 
+        warn!("context::switch: getting idle_context");
         let idle_context = percpu.switch_internals.idle_context();
+        warn!("context::switch: got idle_context");
 
         // Stateful flag used to skip the idle process the first time it shows up.
         // After that, this flag is set to `false` so the idle process can be
         // picked up.
         let mut skip_idle = true;
+        warn!("context::switch: set skip_idle={}, about to iterate contexts", skip_idle);
 
         // Attempt to locate the next context to switch to.
         for next_context_lock in contexts
@@ -214,7 +249,9 @@ pub fn switch(token: &mut CleanLockToken) -> SwitchResult {
         // ... but not the current context (note the `Bound::Excluded`),
         // which is already locked.
         {
+            warn!("context::switch: for loop iteration, checking context");
             if Arc::ptr_eq(&next_context_lock, &idle_context) && skip_idle {
+                warn!("context::switch: skipping idle context (first time)");
                 // Skip idle process the first time it shows up, but allow it
                 // to be picked up again the next time.
                 skip_idle = false;
@@ -222,9 +259,11 @@ pub fn switch(token: &mut CleanLockToken) -> SwitchResult {
             }
 
             {
+                warn!("context::switch: locking next context");
                 // Lock next context
                 // We are careful not to lock this context twice
                 let mut next_context_guard = unsafe { next_context_lock.write_arc() };
+                warn!("context::switch: locked next context");
 
                 // Check if the context is runnable and can be switched to.
                 if let UpdateResult::CanSwitch =
@@ -237,21 +276,32 @@ pub fn switch(token: &mut CleanLockToken) -> SwitchResult {
                 }
             }
         }
+        warn!("context::switch: for loop completed, switch_context_opt={}", switch_context_opt.is_some());
     };
 
+    warn!("context::switch: getting switch_time");
     // Update per-cpu times
     let switch_time = crate::time::monotonic();
+    warn!("context::switch: got switch_time={}", switch_time);
     let percpu_nanos = switch_time.saturating_sub(percpu.switch_internals.switch_time.get()) as u64;
+    warn!("context::switch: calculated percpu_nanos={}", percpu_nanos);
     let percpu_ms = percpu_nanos / 1_000_000;
+    warn!("context::switch: calculated percpu_ms={}", percpu_ms);
     percpu.stats.add_time(percpu_ms);
+    warn!("context::switch: added percpu time");
     percpu.switch_internals.switch_time.set(switch_time);
+    warn!("context::switch: set switch_time");
 
     // Switch process states, TSS stack pointer, and store new context ID
+    warn!("context::switch: matching switch_context_opt");
     match switch_context_opt {
         Some((mut prev_context_guard, mut next_context_guard)) => {
+            warn!("context::switch: Some(...) branch, about to get prev/next context refs");
             // Update context states and prepare for the switch.
             let prev_context = &mut *prev_context_guard;
             let next_context = &mut *next_context_guard;
+            warn!("context::switch: got prev/next context refs, prev_id={} next_id={}",
+                  prev_context.debug_id, next_context.debug_id);
 
             // Verbose context switch logging disabled - floods output
             // debug!(
@@ -329,9 +379,11 @@ pub fn switch(token: &mut CleanLockToken) -> SwitchResult {
                 .being_sigkilled
                 .set(next_context.being_sigkilled);
 
+            warn!("context::switch: about to call arch::switch_to (prev={}, next={})", prev_context.debug_id, next_context.debug_id);
             unsafe {
                 arch::switch_to(prev_context, next_context);
             }
+            warn!("context::switch: returned from arch::switch_to");
 
             // NOTE: After switch_to is called, the return address can even be different from the
             // current return address, meaning that we cannot use local variables here, and that we
