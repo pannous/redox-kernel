@@ -479,89 +479,44 @@ global_asm!("
         dsb sy
         isb
 
-        // Serial marker 'E' - About to enable MMU
+        // CRITICAL: Disable interrupts before proceeding
+        msr daifset, #0xF  // Disable all interrupts (Debug, SError, IRQ, FIQ)
+
+        // Serial marker 'E' - Interrupts disabled
         mov w11, #0x45  // 'E'
         str w11, [x9]
 
-        // Enable MMU
-        mrs x3, sctlr_el1
-        orr x3, x3, #0x1          // Set M bit (MMU enable)
-        msr sctlr_el1, x3
-        isb
-
-        // CRITICAL TEST: Write to serial using PHYSICAL address right after MMU enable
-        // This tests if we can still access devices after MMU is on
-        mov w11, #0x4F  // 'O' - MMU enabled, still using physical serial address
-        str w11, [x9]   // x9 is still physical 0x09000000
-
-        // Update serial address to PHYS_OFFSET mapping after MMU enable
-        movz x9, #0x0000, lsl #0
-        movk x9, #0x9000, lsl #16
-        movk x9, #0x8000, lsl #32
-        movk x9, #0xFFFF, lsl #48
-
-        // Serial marker 'D' - MMU enabled and serial address updated
-        mov w11, #0x44  // 'D'
+        // Marker immediately after E
+        mov w11, #0x36  // '6'
         str w11, [x9]
 
-        // Load stack_end (offset 24 in KernelArgsAp)
-        // x10 still contains args_phys (physical address)
+        // Load stack_end (offset 24) - use PHYSICAL address
         ldr x2, [x10, #24]
-
-        // Convert stack to PHYS_OFFSET virtual mapping
-        movz x7, #0x0000, lsl #0
-        movk x7, #0x0000, lsl #16
-        movk x7, #0x8000, lsl #32
-        movk x7, #0xFFFF, lsl #48
-        add x2, x2, x7    // x2 = virtual stack pointer
         mov sp, x2
 
-        // Serial marker 'S' - Stack ready
+        // Serial marker 'S' - Stack ready (physical)
         mov w11, #0x53  // 'S'
         str w11, [x9]
 
-        // Convert args_phys (x10) to virtual for passing to Rust
-        movz x6, #0x0000, lsl #0
-        movk x6, #0x0000, lsl #16
-        movk x6, #0x8000, lsl #32
-        movk x6, #0xFFFF, lsl #48
-        add x0, x10, x6  // x0 = args_virt (PHYS_OFFSET + args_phys)
+        // Pass args_phys directly to Rust (no conversion)
+        mov x0, x10
 
         // Clear link register
         mov lr, #0
 
-        // Serial marker 'J' - About to jump to virtual space
+        // Serial marker 'J' - About to jump to Rust (physical)
         mov w11, #0x4A  // 'J'
         str w11, [x9]
 
-        // TEST: Try writing to stack to verify it's accessible
-        mov x11, #0x1234
-        str x11, [sp, #-16]!  // Push test value
-        ldr x11, [sp]          // Read it back
-        add sp, sp, #16        // Restore SP
+        // Load PHYSICAL address of Rust entry point
+        // We're executing from physical space, so use PC-relative addressing
+        adr x8, ap_entry_minimal
 
-        // Serial marker 'K' - Stack test passed
-        mov w11, #0x4B  // 'K'
-        str w11, [x9]
-
-        // Load virtual address of Rust entry point
-        adr x8, rust_entry_addr
-        ldr x8, [x8]              // x8 = KERNEL_OFFSET virtual address
-
-        // Flush instruction cache
-        ic iallu
-        dsb ish
-        isb
-
-        // Serial marker '>' - Jumping to virtual space
+        // Serial marker '>' - Jumping to Rust
         mov w11, #0x3E  // '>'
         str w11, [x9]
 
-        // Final marker before jump
-        mov w11, #0x21  // '!' - really about to jump now!
-        str w11, [x9]
-
-        // Jump to virtual space
+        // Jump to Rust code (still at physical address)
         br x8
 
         // CRITICAL: Add ISB after jump fails (shouldn't reach here)
