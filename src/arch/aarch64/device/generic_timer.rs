@@ -130,22 +130,32 @@ impl InterruptHandler for GenericTimer {
         static TIMER_INT_COUNT: AtomicU64 = AtomicU64::new(0);
 
         let count = TIMER_INT_COUNT.fetch_add(1, Ordering::Relaxed);
-        if count % 100 == 0 {
+        // Log first 20 interrupts to debug continuous operation
+        if count < 20 {
+            warn!("Timer interrupt #{} on CPU {}", count, crate::cpu_id().get());
+        } else if count % 100 == 0 {
             info!("Timer interrupt #{}", count);
         }
 
+        warn!("Timer IRQ handler: clearing IRQ");
         self.clear_irq();
+        warn!("Timer IRQ handler: updating time");
         {
             *time::OFFSET.lock() += self.clk_freq as u128;
         }
 
+        warn!("Timer IRQ handler: calling timeout::trigger");
         timeout::trigger(token);
+        warn!("Timer IRQ handler: calling context::switch::tick");
         context::switch::tick(token);
 
+        warn!("Timer IRQ handler: calling trigger({})", irq);
         unsafe {
             trigger(irq, token);
         }
+        warn!("Timer IRQ handler: reloading timer");
         self.reload_count();
+        warn!("Timer IRQ handler: complete");
     }
 }
 
@@ -183,12 +193,40 @@ pub unsafe fn init_local_timer() {
         // Enable timer and unmask interrupt (ENABLE=1, IMASK=0)
         let ctrl = TimerCtrlFlags::ENABLE;  // IMASK not set = interrupt enabled
         unsafe { control_regs::vtmr_ctrl_write(ctrl.bits()) };
+
+        // Read back to verify
+        let ctrl_read = unsafe { control_regs::vtmr_ctrl() };
+        warn!("Virtual timer: wrote ctrl=0x{:x}, read back=0x{:x}", ctrl.bits(), ctrl_read);
     } else {
         unsafe { control_regs::ptmr_tval_write(reload_count) };
         // Enable timer and unmask interrupt (ENABLE=1, IMASK=0)
         let ctrl = TimerCtrlFlags::ENABLE;  // IMASK not set = interrupt enabled
         unsafe { control_regs::ptmr_ctrl_write(ctrl.bits()) };
+
+        // Read back to verify
+        let ctrl_read = unsafe { control_regs::ptmr_ctrl() };
+        warn!("Physical timer: wrote ctrl=0x{:x}, read back=0x{:x}", ctrl.bits(), ctrl_read);
     }
+
+    // Check CPU interrupt mask state (DAIF register)
+    let daif: u64;
+    unsafe {
+        core::arch::asm!("mrs {}, daif", out(reg) daif);
+    }
+    warn!("CPU DAIF register: 0x{:x} (I={}, F={}, A={}, D={})",
+          daif, (daif >> 7) & 1, (daif >> 6) & 1, (daif >> 8) & 1, (daif >> 9) & 1);
+
+    // Wait a bit and check if timer is counting down
+    for _ in 0..1000 {
+        core::hint::spin_loop();
+    }
+
+    let tval_after = if use_virtual_timer {
+        unsafe { control_regs::vtmr_tval() }
+    } else {
+        unsafe { control_regs::ptmr_tval() }
+    };
+    warn!("Timer value after delay: {} (should be less than {})", tval_after, reload_count);
 
     info!("Local timer initialized and enabled with interrupt unmasked");
 }
