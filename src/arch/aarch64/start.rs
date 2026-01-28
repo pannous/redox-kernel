@@ -360,7 +360,9 @@ unsafe extern "C" fn start(args_ptr: *const KernelArgs) -> ! {
                 }
             }
 
+            info!("BSP: Setting BSP_READY to true");
             BSP_READY.store(true, Ordering::SeqCst);
+            info!("BSP: BSP_READY set, value={}", BSP_READY.load(Ordering::SeqCst));
 
             args.bootstrap()
         };
@@ -545,14 +547,21 @@ unsafe fn start_ap_shared(args_phys: usize) -> ! {
 
     warn!("AP {}: Initialized via shared start() path!", cpu_id.get());
 
-    // Signal readiness
-    AP_READY.store(true, Ordering::SeqCst);
-
     // Wait for BSP to complete initialization
     while !BSP_READY.load(Ordering::SeqCst) {
-        core::hint::spin_loop();
+        unsafe {
+            core::ptr::write_volatile(serial, 0x2E); // '.' = Still waiting
+        }
+        for _ in 0..100000 {
+            core::hint::spin_loop();
+        }
+    }
+
+    unsafe {
+        core::ptr::write_volatile(serial, 0x21); // '!' = BSP ready, proceeding
     }
 
     // Call kmain_ap to enter scheduler
+    info!("AP {}: Calling kmain_ap", cpu_id.get());
     crate::kmain_ap(cpu_id);
 }
