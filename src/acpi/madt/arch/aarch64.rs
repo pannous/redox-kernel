@@ -230,6 +230,10 @@ unsafe fn start_secondary_cpus(giccs: &[&super::MadtGicc]) {
         // Get kernel physical base from memory map (needed for args and entry point)
         let kernel_phys_base = crate::startup::memory::kernel_phys_base() as u64;
 
+        // SIMPLIFIED: Use kernel page table for both TTBR0 and TTBR1
+        // The kernel is already identity-mapped, so this works for transition
+        let idmap_phys = page_table_phys;
+
         // Write args to allocated frame
         unsafe {
             args_virt.write(crate::arch::start::KernelArgsAp {
@@ -237,7 +241,8 @@ unsafe fn start_secondary_cpus(giccs: &[&super::MadtGicc]) {
                 page_table: page_table_phys,
                 stack_start: stack_start as u64,
                 stack_end: stack_end as u64,
-                kernel_phys_base,  // NEW: Pass kernel physical base
+                kernel_phys_base,
+                idmap_pg_dir: idmap_phys,  // Use kernel PT (already identity-mapped)
             });
         }
 
@@ -254,8 +259,8 @@ unsafe fn start_secondary_cpus(giccs: &[&super::MadtGicc]) {
         let offset = entry_point_virt - KERNEL_OFFSET as u64;
         let entry_point_phys = kernel_phys_base + offset;
 
-        info!("PSCI CPU_ON: mpidr=0x{:x}, virt=0x{:x}, phys=0x{:x}, kbase=0x{:x}, context=0x{:x}",
-              mpidr, entry_point_virt, entry_point_phys, kernel_phys_base, args_phys);
+        info!("PSCI CPU_ON: mpidr=0x{:x}, entry_phys=0x{:x}, kernel_pt=0x{:x}, idmap_pt=0x{:x}",
+              mpidr, entry_point_phys, page_table_phys, idmap_phys);
 
         // Reset AP_READY flag
         crate::arch::start::AP_READY.store(false, Ordering::SeqCst);
@@ -349,6 +354,10 @@ unsafe fn start_secondary_cpus_from_dtb(total_cpus: usize) {
         // Get kernel physical base from memory map (needed for args and entry point)
         let kernel_phys_base = crate::startup::memory::kernel_phys_base() as u64;
 
+        // SIMPLIFIED: Use kernel page table for both TTBR0 and TTBR1
+        // The kernel is already identity-mapped, so this works for transition
+        let idmap_phys = page_table_phys;
+
         // Write args to allocated frame
         unsafe {
             args_virt.write(crate::arch::start::KernelArgsAp {
@@ -356,7 +365,8 @@ unsafe fn start_secondary_cpus_from_dtb(total_cpus: usize) {
                 page_table: page_table_phys,
                 stack_start: stack_start as u64,
                 stack_end: stack_end as u64,
-                kernel_phys_base,  // NEW: Pass kernel physical base
+                kernel_phys_base,
+                idmap_pg_dir: idmap_phys,  // Use kernel PT (already identity-mapped)
             });
         }
 
@@ -373,8 +383,8 @@ unsafe fn start_secondary_cpus_from_dtb(total_cpus: usize) {
         let offset = entry_point_virt - KERNEL_OFFSET as u64;
         let entry_point_phys = kernel_phys_base + offset;
 
-        info!("PSCI CPU_ON: mpidr=0x{:x}, virt=0x{:x}, phys=0x{:x}, kbase=0x{:x}, context=0x{:x}",
-              mpidr, entry_point_virt, entry_point_phys, kernel_phys_base, args_phys);
+        info!("PSCI CPU_ON: mpidr=0x{:x}, entry_phys=0x{:x}, kernel_pt=0x{:x}, idmap_pt=0x{:x}",
+              mpidr, entry_point_phys, page_table_phys, idmap_phys);
 
         // Reset AP_READY flag
         crate::arch::start::AP_READY.store(false, Ordering::SeqCst);

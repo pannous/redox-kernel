@@ -29,6 +29,15 @@ SECTIONS {
         __text_end = .;
     }
 
+    /* Identity-mapped transition code for AP boot */
+    /* Linux-style .idmap.text section - must be ≤4KB */
+    .idmap.text : AT(ADDR(.idmap.text) - KERNEL_OFFSET) {
+        __idmap_text_start = .;
+        *(.idmap.text)
+        __idmap_text_end = .;
+        . = ALIGN(4096);
+    }
+
     .rodata : AT(ADDR(.rodata) - KERNEL_OFFSET) {
         __rodata_start = .;
         *(.rodata*)

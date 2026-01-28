@@ -371,11 +371,12 @@ unsafe extern "C" fn start(args_ptr: *const KernelArgs) -> ! {
 
 #[repr(C, packed)]
 pub struct KernelArgsAp {
-    pub cpu_id: u64,
-    pub page_table: u64,
-    pub stack_start: u64,
-    pub stack_end: u64,
-    pub kernel_phys_base: u64,  // NEW: Physical base address of kernel
+    pub cpu_id: u64,          // offset 0
+    pub page_table: u64,      // offset 8  (TTBR1 - kernel page table)
+    pub stack_start: u64,     // offset 16
+    pub stack_end: u64,       // offset 24
+    pub kernel_phys_base: u64,// offset 32
+    pub idmap_pg_dir: u64,    // offset 40 (NEW - TTBR0 identity table)
 }
 
 // External declaration for assembly entry point
@@ -387,6 +388,9 @@ unsafe extern "C" {
 ///
 /// CRITICAL: PSCI starts with MMU in unknown state. Symbols are linked at KERNEL_OFFSET
 /// virtual addresses, but PC is at physical/identity-mapped address.
+///
+/// This code is placed in .idmap.text section for Linux-style identity mapping
+#[unsafe(link_section = ".idmap.text")]
 global_asm!("
     .globl kstart_ap
     kstart_ap:
@@ -400,189 +404,124 @@ global_asm!("
         // Save x0 for later - we'll need it after page table setup
         mov x10, x0
 
-        // Load page_table (offset 8 in KernelArgsAp)
-        ldr x1, [x0, #8]
-        msr ttbr1_el1, x1
-        msr ttbr0_el1, x1
-
-        // Flush TLB
-        dsb sy
-        tlbi vmalle1
-        dsb sy
-        isb
-
-        // Serial debug marker 'B' - Page tables loaded, MMU enabled
+        // Serial marker 'B' - Loading page tables
         mov w11, #0x42  // 'B'
         str w11, [x9]
 
-        // **NEW APPROACH**: Do ALL setup in identity-mapped space
-        // THEN jump directly to start() (which is also identity-mapped)
-        //
-        // We're in identity-mapped space, so use PHYSICAL addresses for now
+        // NEW: Load dual page tables (Linux approach)
+        // TTBR0_EL1 = idmap_pg_dir (identity mapping for transition code)
+        // TTBR1_EL1 = kernel page table (kernel virtual addresses)
 
-        // Serial marker 'C' - Starting setup
+        ldr x1, [x0, #8]           // x1 = kernel page table phys
+        msr ttbr1_el1, x1
+
+        ldr x2, [x0, #40]          // x2 = idmap_pg_dir phys (NEW field!)
+        msr ttbr0_el1, x2
+
+        // Serial marker 'C' - Dual page tables loaded
         mov w11, #0x43  // 'C'
         str w11, [x9]
 
-        // Setup exception handlers (LDR works in identity space)
-        ldr x4, =exception_vector_base
-        msr vbar_el1, x4
+        // Configure TCR_EL1 before enabling MMU
+        // T0SZ=16 (48-bit VA for TTBR0), T1SZ=16 (48-bit VA for TTBR1)
+        // TG0=0 (4KB granule TTBR0), TG1=2 (4KB granule TTBR1)
+        // IPS=5 (48-bit PA), both inner/outer shareable, write-back cacheable
+        movz x3, #0x5080, lsl #0
+        movk x3, #0x3510, lsl #16
+        msr tcr_el1, x3
         isb
 
-        // Serial marker 'D' - VBAR set
+        // Configure MAIR_EL1 (Memory Attribute Indirection Register)
+        // Attr0=0xFF (Normal, Write-Back), Attr1=0x04 (Device-nGnRE)
+        movz x3, #0x44FF, lsl #0
+        msr mair_el1, x3
+        isb
+
+        // Flush TLB for both page tables
+        dsb sy
+        tlbi vmalle1              // Invalidate TLB entries
+        dsb sy
+        isb
+
+        // CRITICAL: Enable MMU!
+        mrs x3, sctlr_el1
+        orr x3, x3, #0x1          // Set M bit (MMU enable)
+        orr x3, x3, #0x4          // Set C bit (data cache enable)
+        orr x3, x3, #0x1000       // Set I bit (instruction cache enable)
+        msr sctlr_el1, x3
+        isb
+
+        // After MMU enable, update serial address to PHYS_OFFSET mapping!
+        // x9 was 0x09000000 (physical), now needs to be 0xFFFF8000_09000000 (virtual)
+        movz x9, #0x0000, lsl #0
+        movk x9, #0x9000, lsl #16
+        movk x9, #0x8000, lsl #32
+        movk x9, #0xFFFF, lsl #48
+
+        // Serial marker 'D' - MMU enabled, setup stack
         mov w11, #0x44  // 'D'
         str w11, [x9]
 
-        // Load stack_end (offset 24 in KernelArgsAp) using PHYSICAL address
+        // Load stack_end (offset 24 in KernelArgsAp)
         // x10 still contains args_phys (physical address)
         ldr x2, [x10, #24]
-
-        // Serial marker 'E' - Stack loaded
-        mov w11, #0x45  // 'E'
-        str w11, [x9]
 
         // Convert stack to PHYS_OFFSET virtual mapping
         movz x7, #0x0000, lsl #0
         movk x7, #0x0000, lsl #16
         movk x7, #0x8000, lsl #32
         movk x7, #0xFFFF, lsl #48
-
-        // Serial marker 'F' - About to add offset
-        mov w11, #0x46  // 'F'
-        str w11, [x9]
-
         add x2, x2, x7    // x2 = virtual stack pointer
-
-        // Serial marker 'G' - Offset added
-        mov w11, #0x47  // 'G'
-        str w11, [x9]
-
         mov sp, x2
 
         // Serial marker 'S' - Stack ready
         mov w11, #0x53  // 'S'
         str w11, [x9]
 
-        // Now convert args_phys (x10) to virtual for passing to Rust
-        // start() expects args as PHYS_OFFSET virtual address
+        // Convert args_phys (x10) to virtual for passing to Rust
         movz x6, #0x0000, lsl #0
         movk x6, #0x0000, lsl #16
         movk x6, #0x8000, lsl #32
         movk x6, #0xFFFF, lsl #48
         add x0, x10, x6  // x0 = args_virt (PHYS_OFFSET + args_phys)
 
-        // Serial marker 'T' - Args converted for Rust
-        mov w11, #0x54  // 'T'
-        str w11, [x9]
-
         // Clear link register
         mov lr, #0
 
-        // Serial marker 'J' - About to jump
+        // Serial marker 'J' - About to jump to virtual space
         mov w11, #0x4A  // 'J'
         str w11, [x9]
 
-        // Final synchronization
-        dsb ish
-        isb
-
-        // Serial marker 'K' - Calculating PHYS_OFFSET address
-        mov w11, #0x4B  // 'K'
-        str w11, [x9]
-
-        // Load kernel_phys_base from KernelArgsAp (offset 32)
-        // x10 still contains args_phys (physical address of struct)
-        ldr x11, [x10, #32]  // x11 = kernel_phys_base
-
-        // Load KERNEL_OFFSET constant (0xFFFF_FF00_0000_0000)
-        movz x12, #0x0000, lsl #0
-        movk x12, #0x0000, lsl #16
-        movk x12, #0xFF00, lsl #32
-        movk x12, #0xFFFF, lsl #48
-
-        // Load address of ap_entry_minimal (KERNEL_OFFSET virtual address)
-        adr x8, target_addr
-        ldr x8, [x8]          // x8 = KERNEL_OFFSET virtual address
-
-        // Convert to physical: phys = virtual - KERNEL_OFFSET + kernel_phys_base
-        sub x8, x8, x12       // x8 = offset from KERNEL_OFFSET
-        add x8, x8, x11       // x8 = physical address
-
-        // Serial marker 'P' - Physical address calculated
-        mov w11, #0x50  // 'P'
-        str w11, [x9]
-
-        // Load PHYS_OFFSET constant (0xFFFF_8000_0000_0000)
-        movz x6, #0x0000, lsl #0
-        movk x6, #0x0000, lsl #16
-        movk x6, #0x8000, lsl #32
-        movk x6, #0xFFFF, lsl #48
-
-        // Convert physical to PHYS_OFFSET virtual: virt = phys + PHYS_OFFSET
-        add x8, x8, x6        // x8 = PHYS_OFFSET virtual address
-
-        // Serial marker 'V' - PHYS_OFFSET virtual address ready
-        mov w11, #0x56  // 'V'
-        str w11, [x9]
-
-        // DIAGNOSTIC: Print first 4 nibbles of address
-        mov x12, x8
-        lsr x13, x12, #60
-        and x13, x13, #0xF
-        add w13, w13, #0x30
-        cmp w13, #0x39
-        ble 1f
-        add w13, w13, #7
-    1:
-        str w13, [x9]
-
-        lsr x13, x12, #56
-        and x13, x13, #0xF
-        add w13, w13, #0x30
-        cmp w13, #0x39
-        ble 2f
-        add w13, w13, #7
-    2:
-        str w13, [x9]
-
-        lsr x13, x12, #52
-        and x13, x13, #0xF
-        add w13, w13, #0x30
-        cmp w13, #0x39
-        ble 3f
-        add w13, w13, #7
-    3:
-        str w13, [x9]
-
-        lsr x13, x12, #48
-        and x13, x13, #0xF
-        add w13, w13, #0x30
-        cmp w13, #0x39
-        ble 4f
-        add w13, w13, #7
-    4:
-        str w13, [x9]
-
-        mov w11, #0x20; str w11, [x9]  // Space
+        // Load virtual address of Rust entry point
+        adr x8, rust_entry_addr
+        ldr x8, [x8]              // x8 = KERNEL_OFFSET virtual address
 
         // Flush instruction cache
         ic iallu
         dsb ish
         isb
 
-        // Serial marker '>' - About to jump
+        // Serial marker '>' - Jumping to virtual space
         mov w11, #0x3E  // '>'
         str w11, [x9]
 
-        // Jump to PHYS_OFFSET virtual address
-        br x8
-
-        // Should never reach here
-        mov w11, #0x58  // 'X' = jump failed!
+        // Final marker before jump
+        mov w11, #0x21  // '!' - really about to jump now!
         str w11, [x9]
 
-    target_addr:
-        .quad {ap_entry}
+        // Jump to virtual space
+        br x8
+
+        // CRITICAL: Add ISB after jump fails (shouldn't reach here)
+        isb
+
+        // Should never reach here - but add marker just in case
+        mov w11, #0x58  // 'X' = returned from jump?!
+        str w11, [x9]
+        b .Lap_stuck
+
+    rust_entry_addr:
+        .quad {ap_entry}          // KERNEL_OFFSET address - now works!
 
     .Lap_stuck:
         wfi

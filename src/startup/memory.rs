@@ -8,6 +8,7 @@ use core::{
     cmp::{max, min},
     mem,
     slice::{self, Iter},
+    sync::atomic::{AtomicUsize, Ordering},
 };
 use rmm::{
     Arch, BumpAllocator, MemoryArea, PageFlags, PageMapper, PhysicalAddress, TableKind,
@@ -136,6 +137,14 @@ static MEMORY_MAP: SyncUnsafeCell<MemoryMap> = SyncUnsafeCell::new(MemoryMap {
     }; 512],
     size: 0,
 });
+
+/// Identity-mapped page table for AP boot (Linux-style idmap_pg_dir)
+static IDMAP_PG_DIR: AtomicUsize = AtomicUsize::new(0);
+
+/// Get physical address of identity-mapped page table for AP boot
+pub fn idmap_pg_dir() -> PhysicalAddress {
+    PhysicalAddress::new(IDMAP_PG_DIR.load(Ordering::Relaxed))
+}
 
 fn align_up(x: usize) -> usize {
     (x.saturating_add(PAGE_SIZE - 1) / PAGE_SIZE) * PAGE_SIZE
@@ -298,8 +307,58 @@ unsafe fn add_memory(areas: &mut [MemoryArea], area_i: &mut usize, mut area: Mem
     }
 }
 
+/// Create identity-mapped page table for AP boot transition
+/// Like Linux's idmap_pg_dir - maps only .idmap.text section
+unsafe fn create_idmap_pg_dir<A: Arch>(
+    bump_allocator: &mut BumpAllocator<A>,
+) -> PhysicalAddress {
+    unsafe extern "C" {
+        static __idmap_text_start: u8;
+        static __idmap_text_end: u8;
+    }
+
+    let idmap_start = &__idmap_text_start as *const u8 as usize;
+    let idmap_end = &__idmap_text_end as *const u8 as usize;
+    let idmap_size = idmap_end - idmap_start;
+
+    info!("Creating idmap_pg_dir: 0x{:x}-0x{:x} ({} bytes)",
+          idmap_start, idmap_end, idmap_size);
+
+    // Get kernel physical base
+    let kernel_phys_base = kernel_phys_base();
+
+    // Calculate physical address of .idmap.text section
+    let idmap_phys_start = idmap_start - KERNEL_OFFSET + kernel_phys_base;
+
+    // Create separate page table for identity mapping
+    let mut idmap_table = PageMapper::<A, _>::create(TableKind::Kernel, bump_allocator)
+        .expect("failed to create idmap page table");
+
+    // Map .idmap.text 1:1 (physical = virtual)
+    let pages = (idmap_size + PAGE_SIZE - 1) / PAGE_SIZE;
+    for i in 0..pages {
+        let phys = PhysicalAddress::new(idmap_phys_start + i * PAGE_SIZE);
+        let virt = VirtualAddress::new(idmap_phys_start + i * PAGE_SIZE);
+
+        // Executable, kernel-only, cached
+        let flags = page_flags::<A>(virt);
+
+        let flush = idmap_table.map_phys(virt, phys, flags)
+            .expect("failed to map idmap page");
+        flush.ignore(); // Not the active table
+    }
+
+    let idmap_phys = idmap_table.table().phys();
+    info!("idmap_pg_dir created at phys 0x{:x}, mapping {} pages", idmap_phys.data(), pages);
+    idmap_phys
+}
+
 unsafe fn map_memory<A: Arch>(areas: &[MemoryArea], mut bump_allocator: &mut BumpAllocator<A>) {
     unsafe {
+        // Create identity page table for AP boot FIRST (Linux-style approach)
+        let idmap_phys = create_idmap_pg_dir::<A>(&mut bump_allocator);
+        IDMAP_PG_DIR.store(idmap_phys.data(), Ordering::Relaxed);
+
         let mut mapper = PageMapper::<A, _>::create(TableKind::Kernel, &mut bump_allocator)
             .expect("failed to create Mapper");
 
