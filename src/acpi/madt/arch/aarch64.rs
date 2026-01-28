@@ -234,6 +234,19 @@ unsafe fn start_secondary_cpus(giccs: &[&super::MadtGicc]) {
         // The kernel is already identity-mapped, so this works for transition
         let idmap_phys = page_table_phys;
 
+        // Read BSP's TCR_EL1 and MAIR_EL1 values to pass to APs
+        let tcr_el1: u64;
+        let mair_el1: u64;
+        unsafe {
+            core::arch::asm!(
+                "mrs {}, tcr_el1",
+                "mrs {}, mair_el1",
+                out(reg) tcr_el1,
+                out(reg) mair_el1,
+            );
+        }
+        debug!("BSP TCR_EL1=0x{:x}, MAIR_EL1=0x{:x}", tcr_el1, mair_el1);
+
         // Write args to allocated frame
         unsafe {
             args_virt.write(crate::arch::start::KernelArgsAp {
@@ -243,6 +256,8 @@ unsafe fn start_secondary_cpus(giccs: &[&super::MadtGicc]) {
                 stack_end: stack_end as u64,
                 kernel_phys_base,
                 idmap_pg_dir: idmap_phys,  // Use kernel PT (already identity-mapped)
+                tcr_el1,   // BSP's TCR value
+                mair_el1,  // BSP's MAIR value
             });
         }
 
@@ -358,6 +373,19 @@ unsafe fn start_secondary_cpus_from_dtb(total_cpus: usize) {
         // The kernel is already identity-mapped, so this works for transition
         let idmap_phys = page_table_phys;
 
+        // Read BSP's TCR_EL1 and MAIR_EL1 values to pass to APs
+        let tcr_el1: u64;
+        let mair_el1: u64;
+        unsafe {
+            core::arch::asm!(
+                "mrs {}, tcr_el1",
+                "mrs {}, mair_el1",
+                out(reg) tcr_el1,
+                out(reg) mair_el1,
+            );
+        }
+        debug!("BSP TCR_EL1=0x{:x}, MAIR_EL1=0x{:x}", tcr_el1, mair_el1);
+
         // Write args to allocated frame
         unsafe {
             args_virt.write(crate::arch::start::KernelArgsAp {
@@ -367,6 +395,8 @@ unsafe fn start_secondary_cpus_from_dtb(total_cpus: usize) {
                 stack_end: stack_end as u64,
                 kernel_phys_base,
                 idmap_pg_dir: idmap_phys,  // Use kernel PT (already identity-mapped)
+                tcr_el1,   // BSP's TCR value
+                mair_el1,  // BSP's MAIR value
             });
         }
 

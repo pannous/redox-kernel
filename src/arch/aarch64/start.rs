@@ -376,7 +376,9 @@ pub struct KernelArgsAp {
     pub stack_start: u64,     // offset 16
     pub stack_end: u64,       // offset 24
     pub kernel_phys_base: u64,// offset 32
-    pub idmap_pg_dir: u64,    // offset 40 (NEW - TTBR0 identity table)
+    pub idmap_pg_dir: u64,    // offset 40 (TTBR0 identity table)
+    pub tcr_el1: u64,         // offset 48 (BSP's TCR value)
+    pub mair_el1: u64,        // offset 56 (BSP's MAIR value)
 }
 
 // External declaration for assembly entry point
@@ -422,43 +424,78 @@ global_asm!("
         mov w11, #0x43  // 'C'
         str w11, [x9]
 
-        // Configure TCR_EL1 before enabling MMU
-        // T0SZ=16 (48-bit VA for TTBR0), T1SZ=16 (48-bit VA for TTBR1)
-        // TG0=0 (4KB granule TTBR0), TG1=2 (4KB granule TTBR1)
-        // IPS=5 (48-bit PA), both inner/outer shareable, write-back cacheable
-        movz x3, #0x5080, lsl #0
-        movk x3, #0x3510, lsl #16
+        // Serial marker 'T' - About to load TCR
+        mov w11, #0x54  // 'T'
+        str w11, [x9]
+
+        // Load TCR_EL1 and MAIR_EL1 values from BSP (offsets 48 and 56)
+        ldr x3, [x0, #48]        // x3 = BSP's TCR_EL1
+
+        // Serial marker 'U' - TCR loaded
+        mov w11, #0x55  // 'U'
+        str w11, [x9]
+
         msr tcr_el1, x3
         isb
 
-        // Configure MAIR_EL1 (Memory Attribute Indirection Register)
-        // Attr0=0xFF (Normal, Write-Back), Attr1=0x04 (Device-nGnRE)
-        movz x3, #0x44FF, lsl #0
+        ldr x3, [x0, #56]        // x3 = BSP's MAIR_EL1
         msr mair_el1, x3
         isb
 
+        // Serial marker 'M' - MAIR set
+        mov w11, #0x4D  // 'M'
+        str w11, [x9]
+
+        // Serial marker '1' - After M
+        mov w11, #0x31  // '1'
+        str w11, [x9]
+
+        // Serial marker '2' - Continue
+        mov w11, #0x32  // '2'
+        str w11, [x9]
+
         // Flush TLB for both page tables
         dsb sy
+
+        // Serial marker '3' - After DSB
+        mov w11, #0x33  // '3'
+        str w11, [x9]
+
         tlbi vmalle1              // Invalidate TLB entries
+
+        // Serial marker '4' - After TLBI
+        mov w11, #0x34  // '4'
+        str w11, [x9]
+
         dsb sy
         isb
 
-        // CRITICAL: Enable MMU!
+        // Serial marker '5' - After barriers
+        mov w11, #0x35  // '5'
+        str w11, [x9]
+
+        // Flush instruction cache before MMU enable
+        ic iallu                  // Invalidate all instruction caches
+        dsb sy
+        isb
+
+        // Serial marker 'E' - About to enable MMU
+        mov w11, #0x45  // 'E'
+        str w11, [x9]
+
+        // Enable MMU
         mrs x3, sctlr_el1
         orr x3, x3, #0x1          // Set M bit (MMU enable)
-        orr x3, x3, #0x4          // Set C bit (data cache enable)
-        orr x3, x3, #0x1000       // Set I bit (instruction cache enable)
         msr sctlr_el1, x3
         isb
 
-        // After MMU enable, update serial address to PHYS_OFFSET mapping!
-        // x9 was 0x09000000 (physical), now needs to be 0xFFFF8000_09000000 (virtual)
+        // Update serial address to PHYS_OFFSET mapping after MMU enable
         movz x9, #0x0000, lsl #0
         movk x9, #0x9000, lsl #16
         movk x9, #0x8000, lsl #32
         movk x9, #0xFFFF, lsl #48
 
-        // Serial marker 'D' - MMU enabled, setup stack
+        // Serial marker 'D' - MMU enabled
         mov w11, #0x44  // 'D'
         str w11, [x9]
 
@@ -490,6 +527,16 @@ global_asm!("
 
         // Serial marker 'J' - About to jump to virtual space
         mov w11, #0x4A  // 'J'
+        str w11, [x9]
+
+        // TEST: Try writing to stack to verify it's accessible
+        mov x11, #0x1234
+        str x11, [sp, #-16]!  // Push test value
+        ldr x11, [sp]          // Read it back
+        add sp, sp, #16        // Restore SP
+
+        // Serial marker 'K' - Stack test passed
+        mov w11, #0x4B  // 'K'
         str w11, [x9]
 
         // Load virtual address of Rust entry point

@@ -395,6 +395,9 @@ unsafe fn map_memory<A: Arch>(areas: &[MemoryArea], mut bump_allocator: &mut Bum
         let kernel_area = (*MEMORY_MAP.get()).kernel().unwrap();
         let kernel_base = kernel_area.start;
         let kernel_size = kernel_area.end - kernel_area.start;
+        info!("Setting up kernel mappings: base=0x{:x}, size=0x{:x}, pages={}",
+              kernel_base, kernel_size, kernel_size / A::PAGE_SIZE);
+
         // Map kernel at KERNEL_OFFSET and identity map too
         for i in 0..kernel_size / A::PAGE_SIZE {
             let phys = PhysicalAddress::new(kernel_base + i * PAGE_SIZE);
@@ -414,10 +417,20 @@ unsafe fn map_memory<A: Arch>(areas: &[MemoryArea], mut bump_allocator: &mut Bum
             // CRITICAL for SMP: Identity map kernel so APs can execute from physical address
             // PSCI starts APs with MMU off at physical entry point
             let virt_identity = VirtualAddress::new(kernel_base + i * PAGE_SIZE);
+            // IMPORTANT: Force executable on identity mapping for AP boot
+            // APs need to execute from physical/identity-mapped addresses before jumping to virtual
+            let identity_flags = flags.execute(true);
             let flush = mapper
-                .map_phys(virt_identity, phys, flags)
+                .map_phys(virt_identity, phys, identity_flags)
                 .expect("failed to identity map kernel");
             flush.ignore(); // Not the active table
+
+            // Log first, AP entry, and last pages for verification
+            let ap_entry_offset = 0x6db0; // AP entry is at kernel_base + 0x6db0
+            if i == 0 || i * A::PAGE_SIZE == ap_entry_offset || i == (kernel_size / A::PAGE_SIZE - 1) {
+                info!("Identity map: virt=0x{:x} -> phys=0x{:x}",
+                      virt_identity.data(), phys.data());
+            }
         }
 
         for area in (*MEMORY_MAP.get()).identity_mapped() {
