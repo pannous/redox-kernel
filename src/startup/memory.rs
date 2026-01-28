@@ -312,44 +312,54 @@ unsafe fn add_memory(areas: &mut [MemoryArea], area_i: &mut usize, mut area: Mem
 unsafe fn create_idmap_pg_dir<A: Arch>(
     bump_allocator: &mut BumpAllocator<A>,
 ) -> PhysicalAddress {
-    unsafe extern "C" {
-        static __idmap_text_start: u8;
-        static __idmap_text_end: u8;
-    }
+    // Get kernel area from memory map
+    let kernel_area = (*MEMORY_MAP.get()).kernel().unwrap();
+    let kernel_base = kernel_area.start;
+    let kernel_size = kernel_area.end - kernel_area.start;
 
-    let idmap_start = &__idmap_text_start as *const u8 as usize;
-    let idmap_end = &__idmap_text_end as *const u8 as usize;
-    let idmap_size = idmap_end - idmap_start;
-
-    info!("Creating idmap_pg_dir: 0x{:x}-0x{:x} ({} bytes)",
-          idmap_start, idmap_end, idmap_size);
-
-    // Get kernel physical base
-    let kernel_phys_base = kernel_phys_base();
-
-    // Calculate physical address of .idmap.text section
-    let idmap_phys_start = idmap_start - KERNEL_OFFSET + kernel_phys_base;
+    info!("Creating idmap_pg_dir: kernel area start=0x{:x}, end=0x{:x}, size=0x{:x} ({} bytes), PAGE_SIZE={}",
+          kernel_base, kernel_area.end, kernel_size, kernel_size, PAGE_SIZE);
 
     // Create separate page table for identity mapping
     let mut idmap_table = PageMapper::<A, _>::create(TableKind::Kernel, bump_allocator)
         .expect("failed to create idmap page table");
 
-    // Map .idmap.text 1:1 (physical = virtual)
-    let pages = (idmap_size + PAGE_SIZE - 1) / PAGE_SIZE;
+    // Map entire kernel region as identity mapping (physical = virtual)
+    // This allows APs to execute kernel code from physical addresses during boot
+    let pages = kernel_size / A::PAGE_SIZE;
     for i in 0..pages {
-        let phys = PhysicalAddress::new(idmap_phys_start + i * PAGE_SIZE);
-        let virt = VirtualAddress::new(idmap_phys_start + i * PAGE_SIZE);
+        let phys = PhysicalAddress::new(kernel_base + i * PAGE_SIZE);
+        let virt = VirtualAddress::new(kernel_base + i * PAGE_SIZE);  // Identity: virt == phys
 
-        // Executable, kernel-only, cached
-        let flags = page_flags::<A>(virt);
+        // All pages executable for simplicity (APs need to execute from here)
+        let flags = PageFlags::new().write(true).execute(true);
 
         let flush = idmap_table.map_phys(virt, phys, flags)
             .expect("failed to map idmap page");
         flush.ignore(); // Not the active table
     }
 
+    // Also need to identity-map devices (serial, GIC, etc.) for AP boot
+    for area in (*MEMORY_MAP.get()).devices() {
+        let base = area.start;
+        let size = area.end - area.start;
+        let dev_pages = size / PAGE_SIZE;
+        for i in 0..dev_pages {
+            let phys = PhysicalAddress::new(base + i * PAGE_SIZE);
+            let virt = VirtualAddress::new(base + i * PAGE_SIZE);
+
+            // Device memory attributes
+            let flags = PageFlags::new().write(true).custom_flag(0x4, true);  // Device flag
+
+            let flush = idmap_table.map_phys(virt, phys, flags)
+                .expect("failed to map device in idmap");
+            flush.ignore();
+        }
+    }
+
     let idmap_phys = idmap_table.table().phys();
-    info!("idmap_pg_dir created at phys 0x{:x}, mapping {} pages", idmap_phys.data(), pages);
+    info!("idmap_pg_dir created at phys 0x{:x}, mapped {} kernel pages + devices",
+          idmap_phys.data(), pages);
     idmap_phys
 }
 

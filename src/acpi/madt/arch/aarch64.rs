@@ -230,9 +230,8 @@ unsafe fn start_secondary_cpus(giccs: &[&super::MadtGicc]) {
         // Get kernel physical base from memory map (needed for args and entry point)
         let kernel_phys_base = crate::startup::memory::kernel_phys_base() as u64;
 
-        // SIMPLIFIED: Use kernel page table for both TTBR0 and TTBR1
-        // The kernel is already identity-mapped, so this works for transition
-        let idmap_phys = page_table_phys;
+        // Get the separate identity mapping page table we created
+        let idmap_phys = crate::startup::memory::idmap_pg_dir().data() as u64;
 
         // Read BSP's TCR_EL1 and MAIR_EL1 values to pass to APs
         let tcr_el1: u64;
@@ -369,9 +368,8 @@ unsafe fn start_secondary_cpus_from_dtb(total_cpus: usize) {
         // Get kernel physical base from memory map (needed for args and entry point)
         let kernel_phys_base = crate::startup::memory::kernel_phys_base() as u64;
 
-        // SIMPLIFIED: Use kernel page table for both TTBR0 and TTBR1
-        // The kernel is already identity-mapped, so this works for transition
-        let idmap_phys = page_table_phys;
+        // Get the separate identity mapping page table we created
+        let idmap_phys = crate::startup::memory::idmap_pg_dir().data() as u64;
 
         // Read BSP's TCR_EL1 and MAIR_EL1 values to pass to APs
         let tcr_el1: u64;

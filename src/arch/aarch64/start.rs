@@ -489,13 +489,18 @@ global_asm!("
         msr sctlr_el1, x3
         isb
 
+        // CRITICAL TEST: Write to serial using PHYSICAL address right after MMU enable
+        // This tests if we can still access devices after MMU is on
+        mov w11, #0x4F  // 'O' - MMU enabled, still using physical serial address
+        str w11, [x9]   // x9 is still physical 0x09000000
+
         // Update serial address to PHYS_OFFSET mapping after MMU enable
         movz x9, #0x0000, lsl #0
         movk x9, #0x9000, lsl #16
         movk x9, #0x8000, lsl #32
         movk x9, #0xFFFF, lsl #48
 
-        // Serial marker 'D' - MMU enabled
+        // Serial marker 'D' - MMU enabled and serial address updated
         mov w11, #0x44  // 'D'
         str w11, [x9]
 
