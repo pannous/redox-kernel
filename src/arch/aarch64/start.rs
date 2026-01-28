@@ -474,20 +474,35 @@ global_asm!("
         mov w11, #0x35  // '5'
         str w11, [x9]
 
-        // Flush instruction cache before MMU enable
-        ic iallu                  // Invalidate all instruction caches
+        // TEST: Put marker before IC IALLU
+        mov w11, #0x36  // '6'
+        str w11, [x9]
+
+        // SKIP ic iallu - it causes hang!
+        // ic iallu
+
+        // Marker - skipped IC IALLU
+        mov w11, #0x37  // '7'
+        str w11, [x9]
+
         dsb sy
+
+        // Marker after DSB
+        mov w11, #0x38  // '8'
+        str w11, [x9]
+
         isb
 
-        // CRITICAL: Disable interrupts before proceeding
-        msr daifset, #0xF  // Disable all interrupts (Debug, SError, IRQ, FIQ)
+        // Marker after ISB
+        mov w11, #0x39  // '9'
+        str w11, [x9]
 
-        // Serial marker 'E' - Interrupts disabled
+        // Serial marker 'E' - All barriers complete
         mov w11, #0x45  // 'E'
         str w11, [x9]
 
-        // Marker immediately after E
-        mov w11, #0x36  // '6'
+        // Marker F - Continuing
+        mov w11, #0x46  // 'F'
         str w11, [x9]
 
         // Load stack_end (offset 24) - use PHYSICAL address
